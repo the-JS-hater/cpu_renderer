@@ -14,7 +14,8 @@ typedef enum
 
 typedef struct
 {
-	uint32_t *data;	
+	uint32_t *data;
+	float *depth_buffer;
 	int width, height;
 } FrameBuffer;
 
@@ -32,6 +33,11 @@ typedef struct
 
 typedef uint32_t Color;
 
+typedef struct 
+{
+	Vec3 pos;
+} Camera;
+
 typedef struct
 {
 	Vec3 pos;
@@ -45,6 +51,9 @@ void clear_background(FrameBuffer *frame_buffer, Color color)
 
 	for (unsigned i = 0; i < size; ++i)
 		frame_buffer->data[i] = color;
+
+	for (unsigned i = 0; i < size; ++i)
+	  frame_buffer->depth_buffer[i] = INFINITY;
 }
 
 void draw_line(FrameBuffer *frame_buffer, Line l, Color color)
@@ -131,9 +140,22 @@ void draw_triangle2D(FrameBuffer *frame_buffer, Triangle2D triangle, Color color
 	}
 }
 
-float cross_product(Vec3 v, Vec3 u)
+float vec_length(Vec3 v)
 {
-	return 0.0f;
+	return sqrt(v.x*v.x + v.y*v.y + v.z*v.z);
+}
+
+float dot(Vec3 v, Vec3 u)
+{
+	return v.x*u.x + v.y*u.y + v.z*u.z;
+}
+
+Vec3 cross_product(Vec3 v, Vec3 u)
+{
+	return (Vec3){
+		v.y*u.z - v.z*u.y, 
+		v.z*u.x - v.x*u.z, 
+		v.x*u.y - v.y*u.x};
 }
 
 void draw_triangle(FrameBuffer *frame_buffer, Vertex *triangle)
@@ -162,13 +184,16 @@ void draw_triangle(FrameBuffer *frame_buffer, Vertex *triangle)
 	  for (int y = min_y; y <= max_y; y++)
 	  {
 			Vec2 q = {x - v1.x, y - v1.y};
-	
 	    float s = cross_product2D(q, vs2) / cross_product2D(vs1, vs2);
 	    float t = cross_product2D(vs1, q) / cross_product2D(vs1, vs2);
-	
+			
 	    if ( (s >= 0) && (t >= 0) && (s + t <= 1))
 	    {
+				float z = (1-s-t)*v1.z + s*v2.z + t*v3.z;
 				unsigned i = (y * width) + x;
+				if (z >= frame_buffer->depth_buffer[i])
+					continue;
+
 				uint8_t r1 = (c1 >> 24) & 0xFF;
 				uint8_t g1 = (c1 >> 16) & 0xFF;
 				uint8_t b1 = (c1 >> 8)  & 0xFF;
@@ -190,10 +215,34 @@ void draw_triangle(FrameBuffer *frame_buffer, Vertex *triangle)
     			(g << 16) |
     			(b << 8)  |
     			(a);
+
+				frame_buffer->depth_buffer[i] = z;
 	      frame_buffer->data[i] = color;
 	    }
 	  }
 	}
+}
+
+void draw_triangles(FrameBuffer *frame_buffer, Vertex *verts, unsigned count)
+{
+	for (unsigned i = 0; i < 3*count; i+=3)
+	{
+		draw_triangle(frame_buffer, &verts[i]);
+	}
+}
+
+FrameBuffer* init_fb(int width, int height)
+{
+	FrameBuffer *frame_buffer = calloc(1, sizeof(FrameBuffer)); 
+	uint32_t *data = calloc(1, width * height * sizeof(uint32_t));
+	float *depth_buffer = calloc(1, width * height * sizeof(float));
+
+	frame_buffer->width = width;
+	frame_buffer->height = height;
+	frame_buffer->data = data;
+	frame_buffer->depth_buffer = depth_buffer;
+	
+	return frame_buffer;
 }
 
 int main()
@@ -204,12 +253,12 @@ int main()
 		perror("Failed to open display\n");
 		exit(1);
 	}
+	uint32_t w_width = 800, w_height = 600;
+	FrameBuffer *frame_buffer = init_fb(w_width, w_height); 
 	
 	int screen = DefaultScreen(display);
 	Visual *visual = DefaultVisual(display, screen);
 	int depth = DefaultDepth(display, screen);
-	
-	uint32_t w_width = 800, w_height = 600;
 	Window window = XCreateSimpleWindow(
 		display,
 		XDefaultRootWindow(display),	// parent
@@ -219,7 +268,6 @@ int main()
 		0x00000000,										// border color
 		0x00000000										// background color
 	);
-
 	XStoreName(display, window, "Prototype");
 
 	//NOTE: will prolly add mouse events later
@@ -232,12 +280,6 @@ int main()
 	XSelectInput(display, window, event_mask); 
 	XMapWindow(display, window);
 	
-	FrameBuffer *frame_buffer = calloc(1, sizeof(FrameBuffer)); 
-	uint32_t *data = calloc(1, w_width * w_height * sizeof(uint32_t));
-	frame_buffer->data = data;
-	frame_buffer->width = w_width;
-	frame_buffer->height = w_height;
-
 	bool quit = false;
 	while (!quit) {
 		while (XPending(display) > 0) {
@@ -256,18 +298,12 @@ int main()
 				printf("Mouse Released\n");
 			} 
 		}
-
-		clear_background(frame_buffer, 0xFFFFFFFF);
+		clear_background(frame_buffer, 0x00000000);
 		float cx = (float)w_width / 2.0f; 
 		float cy = (float)w_height / 2.0f;
 		float offset = (float)w_height / 4.0f;
-		// Triangle2D t = {
-		// 	{cx, cy - offset},
-		// 	{cx + offset, cy + offset},
-		// 	{cx - offset, cy + offset},
-		// };
-		// draw_triangle2D(frame_buffer, t, 0x00FF0000);
 		
+		//NOTE: all coords in screen space for now
 		Vertex triangle[3] = {
 			{
 		 		{cx, cy - offset, 1.0f},
@@ -282,7 +318,40 @@ int main()
 				0xFF0000FF
 			},
 		};
-		draw_triangle(frame_buffer, triangle);
+		Vertex depth_test[6] = {
+		  {
+				{cx - offset, cy - offset, 0.3f}, 
+				0xFFFF0000
+			},
+		  {
+				{cx + offset, cy - offset, 0.3f}, 
+				0xFFFF0000
+			},
+		  {
+				{cx, cy + offset, 0.3f}, 
+				0xFFFF0000
+			},
+		  {
+				{cx - offset, cy - offset * 0.9, 0.8f}, 
+				0xFF0000FF
+			},
+		  {
+				{cx + offset, cy - offset * 0.9, 0.8f}, 
+				0xFF0000FF
+			},
+		  {
+				{cx, cy + offset/2, 0.1f}, 
+				0xFF0000FF
+			},
+		};
+		Vertex proj_triangle[3] = {
+		  {{-1, -1, 0}, 0xFF0000FF},
+		  {{ 1, -1, 0}, 0xFF0000FF},
+		  {{ 0,  1, 0}, 0xFF0000FF},
+		};
+		draw_triangles(frame_buffer, triangle, 1);
+		draw_triangles(frame_buffer, depth_test, 2);
+		// draw_triangles(frame_buffer, proj_triangle, 1);
 
 		XImage *img = XCreateImage(
   	  display,
@@ -296,7 +365,6 @@ int main()
   	  32,
   	  0
 		);
-
 		XPutImage(
 		  display,
 		  window,
@@ -307,10 +375,8 @@ int main()
 		  w_width,
 		  w_height
 		);
-		
 		XFlush(display);
 	}
-	
 	XDestroyWindow(display, window);
 	XCloseDisplay(display);
 	return 0;
