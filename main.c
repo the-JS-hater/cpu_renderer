@@ -24,7 +24,19 @@ typedef struct
 typedef struct
 { float x, y, z; } Vec3;
 
+typedef struct 
+{ Vec2 s, e; } Line;
+
+typedef struct
+{ Vec2 v1, v2, v3; } Triangle;
+
 typedef uint32_t Color;
+
+typedef struct
+{
+	Vec3 pos;
+	Color color;
+} Vertex;
 
 void clear_background(FrameBuffer *frame_buffer, Color color)
 {
@@ -35,12 +47,13 @@ void clear_background(FrameBuffer *frame_buffer, Color color)
 		frame_buffer->data[i] = color;
 }
 
-void draw_line(FrameBuffer *frame_buffer, Vec2 s, Vec2 e, Color color)
+void draw_line(FrameBuffer *frame_buffer, Line l, Color color)
 {
-	int width, height, xs, xe, ys, ye;
+	int width, xs, xe, ys, ye;
+	Vec2 s = l.s; 
+	Vec2 e = l.e;
 	
 	width = frame_buffer->width;
-	height = frame_buffer->height;
 
 	xs = (int)roundf(s.x);
 	xe = (int)roundf(e.x);
@@ -75,6 +88,46 @@ void draw_line(FrameBuffer *frame_buffer, Vec2 s, Vec2 e, Color color)
 		{
 			dk = dk + 2*dy;
 		}
+	}
+}
+
+float cross_product2D(Vec2 v, Vec2 u)
+{
+	return v.x*u.y - v.y*u.x; 
+}
+
+void draw_triangle2D(FrameBuffer *frame_buffer, Triangle triangle, Color color)
+{
+	int width = frame_buffer->width;
+
+	Vec2 v1, v2, v3;
+	v1 = triangle.v1;
+	v2 = triangle.v2;
+	v3 = triangle.v3;
+	
+	int max_x = roundf(fmax(v1.x, fmax(v2.x, v3.x)));
+	int min_x = roundf(fmin(v1.x, fmin(v2.x, v3.x)));
+	int max_y = roundf(fmax(v1.y, fmax(v2.y, v3.y)));
+	int min_y = roundf(fmin(v1.y, fmin(v2.y, v3.y)));
+	
+	Vec2 vs1 = {v2.x - v1.x, v2.y - v1.y};
+	Vec2 vs2 = {v3.x - v1.x, v3.y - v1.y};
+
+	for (int x = min_x; x <= max_x; x++)
+	{
+	  for (int y = min_y; y <= max_y; y++)
+	  {
+			Vec2 q = {x - v1.x, y - v1.y};
+	
+	    float s = cross_product2D(q, vs2) / cross_product2D(vs1, vs2);
+	    float t = cross_product2D(vs1, q) / cross_product2D(vs1, vs2);
+	
+	    if ( (s >= 0) && (t >= 0) && (s + t <= 1))
+	    {
+				unsigned i = (y * width) + x;
+	      frame_buffer->data[i] = color;
+	    }
+	  }
 	}
 }
 
@@ -140,9 +193,16 @@ int main()
 		}
 
 		clear_background(frame_buffer, 0xFFFFFFFF);
-		
-		draw_line(frame_buffer, (Vec2){7.3f, 14.9f}, (Vec2){765.0f, 476.7f}, 0xFFFF0000);
-		draw_line(frame_buffer, (Vec2){457.3f, 254.0f}, (Vec2){30.0f, 345.6f}, 0xFF00FF00);
+		float cx = (float)w_width / 2.0f; 
+		float cy = (float)w_height / 2.0f;
+		float offset = (float)w_height / 4.0f;
+		Triangle t = {
+			{cx, cy - offset},
+			{cx + offset, cy + offset},
+			{cx - offset, cy + offset},
+		};
+
+		draw_triangle2D(frame_buffer, t, 0x00FF0000);
 	
 		XImage *img = XCreateImage(
   	  display,
