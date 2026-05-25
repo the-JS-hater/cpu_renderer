@@ -2,8 +2,81 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdint.h>
+
+#include <math.h>
 #include <X11/Xlib.h>
 
+
+typedef enum
+{	
+	KEY_ESC = 9,
+} KEY_ENUM;
+
+typedef struct
+{
+	uint32_t *data;	
+	int width, height;
+} FrameBuffer;
+
+typedef struct
+{ float x, y; } Vec2;
+
+typedef struct
+{ float x, y, z; } Vec3;
+
+typedef uint32_t Color;
+
+void clear_background(FrameBuffer *frame_buffer, Color color)
+{
+	int const size = 
+		frame_buffer->width * frame_buffer->height;
+
+	for (unsigned i = 0; i < size; ++i)
+		frame_buffer->data[i] = color;
+}
+
+void draw_line(FrameBuffer *frame_buffer, Vec2 s, Vec2 e, Color color)
+{
+	int width, height, xs, xe, ys, ye;
+	
+	width = frame_buffer->width;
+	height = frame_buffer->height;
+
+	xs = (int)roundf(s.x);
+	xe = (int)roundf(e.x);
+	ys = (int)roundf(s.y);
+	ye = (int)roundf(e.y);
+	
+	int sx = (xe >= xs) ? 1 : -1;
+	int sy = (ye >= ys) ? 1 : -1;
+
+	int dx = abs(xe - xs);
+	int dy = abs(ye - ys);
+
+	int dk = 2 * dy - dx;
+	int xk = xs;
+	int yk = ys;
+	
+	while (true)
+	{
+		unsigned i = (yk * width) + xk;
+		frame_buffer->data[i] = color;
+		
+		if (xk == xe && yk == ye)
+			break;
+
+		xk = xk + sx;
+		if (dk > 0)
+		{
+			dk = dk + 2*dy - 2*dx;
+			yk = yk + sy;
+		}
+		else 
+		{
+			dk = dk + 2*dy;
+		}
+	}
+}
 
 int main()
 {
@@ -41,51 +114,43 @@ int main()
 	XSelectInput(display, window, event_mask); 
 	XMapWindow(display, window);
 	
-	bool quit = false;
-	int keycode = 0;
-	uint32_t *frame_buffer = calloc(1, w_width * w_height * sizeof(uint32_t));
+	FrameBuffer *frame_buffer = calloc(1, sizeof(FrameBuffer)); 
+	uint32_t *data = calloc(1, w_width * w_height * sizeof(uint32_t));
+	frame_buffer->data = data;
+	frame_buffer->width = w_width;
+	frame_buffer->height = w_height;
 
-	for (unsigned i = 0; i < w_width * w_height; ++i)
-		frame_buffer[i] = 0xFF0000;
-		
-	
+	bool quit = false;
 	while (!quit) {
 		while (XPending(display) > 0) {
 			XEvent event = {0};
 			XNextEvent(display, &event);
 			if (event.type == KeyPress) {
 				printf("Key pressed: %d\n", event.xkey.keycode);
-				keycode = event.xkey.keycode;
+				
+				if (event.xkey.keycode == KEY_ESC) 
+					quit = true;
 			} 
 			if (event.type == ButtonPress) {
 				printf("Mouse pressed\n");
-				quit = true;
 			} 
 			if (event.type == ButtonRelease) {
 				printf("Mouse Released\n");
 			} 
 		}
 
-		for (unsigned i = 0; i < w_width * w_height; ++i)
-		{
-			unsigned x, y;
-			x = i % w_width + keycode;
-			y = i / w_width + keycode;
-			uint32_t v = (x * 1973u + y * 9277u + keycode * 26699u) ^ (x * y);
-			uint8_t r = (v >>  0) & 255;
-			uint8_t g = (v >>  8) & 255;
-			uint8_t b = (v >> 16) & 255;
-			
-			frame_buffer[i] = (r << 16) | (g << 8) | b;
-		}
-
+		clear_background(frame_buffer, 0xFFFFFFFF);
+		
+		draw_line(frame_buffer, (Vec2){7.3f, 14.9f}, (Vec2){765.0f, 476.7f}, 0xFFFF0000);
+		draw_line(frame_buffer, (Vec2){457.3f, 254.0f}, (Vec2){30.0f, 345.6f}, 0xFF00FF00);
+	
 		XImage *img = XCreateImage(
   	  display,
   	  visual,
   	  depth,
   	  ZPixmap,
   	  0,
-  	  (char*)frame_buffer,
+  	  (char*)frame_buffer->data,
   	  w_width,
   	  w_height,
   	  32,
