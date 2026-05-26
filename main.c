@@ -6,10 +6,17 @@
 #include <math.h>
 #include <X11/Xlib.h>
 
+#include "linalg.h"
+
 
 typedef enum
 {	
 	KEY_ESC = 9,
+	KEY_W 	= 25,
+	KEY_A 	= 38,
+	KEY_S 	= 39,
+	KEY_D 	= 40,
+	KEY_R 	= 27,
 } KEY_ENUM;
 
 typedef struct
@@ -18,12 +25,6 @@ typedef struct
 	float *depth_buffer;
 	int width, height;
 } FrameBuffer;
-
-typedef struct
-{ float x, y; } Vec2;
-
-typedef struct
-{ float x, y, z; } Vec3;
 
 typedef struct 
 { Vec2 s, e; } Line;
@@ -100,11 +101,6 @@ void draw_line(FrameBuffer *frame_buffer, Line l, Color color)
 	}
 }
 
-float cross_product2D(Vec2 v, Vec2 u)
-{
-	return v.x*u.y - v.y*u.x; 
-}
-
 void draw_triangle2D(FrameBuffer *frame_buffer, Triangle2D triangle, Color color)
 {
 	int width = frame_buffer->width;
@@ -138,24 +134,6 @@ void draw_triangle2D(FrameBuffer *frame_buffer, Triangle2D triangle, Color color
 	    }
 	  }
 	}
-}
-
-float vec_length(Vec3 v)
-{
-	return sqrt(v.x*v.x + v.y*v.y + v.z*v.z);
-}
-
-float dot(Vec3 v, Vec3 u)
-{
-	return v.x*u.x + v.y*u.y + v.z*u.z;
-}
-
-Vec3 cross_product(Vec3 v, Vec3 u)
-{
-	return (Vec3){
-		v.y*u.z - v.z*u.y, 
-		v.z*u.x - v.x*u.z, 
-		v.x*u.y - v.y*u.x};
 }
 
 void draw_triangle(FrameBuffer *frame_buffer, Vertex *triangle)
@@ -282,21 +260,42 @@ int main()
 	
 	bool quit = false;
 	while (!quit) {
+
+		static float x = 0.0f, y = 0.0f, r = 1.0f;
+		
 		while (XPending(display) > 0) {
 			XEvent event = {0};
 			XNextEvent(display, &event);
-			if (event.type == KeyPress) {
+			if (event.type == KeyPress) 
+			{
 				printf("Key pressed: %d\n", event.xkey.keycode);
-				
-				if (event.xkey.keycode == KEY_ESC) 
-					quit = true;
-			} 
-			if (event.type == ButtonPress) {
+				switch (event.xkey.keycode)
+				{
+					case KEY_ESC:
+						quit = true;
+						break;
+					case KEY_W:
+						y -= 10.0f;
+						break;
+					case KEY_A:
+						x -= 10.0f;
+						break;
+					case KEY_S:
+						y += 10.0f;
+						break;
+					case KEY_D:
+						x += 10.0f;
+						break;
+					case KEY_R:
+						r += 0.1f;
+						break;
+				}
+			}
+			if (event.type == ButtonPress)
 				printf("Mouse pressed\n");
-			} 
-			if (event.type == ButtonRelease) {
+
+			if (event.type == ButtonRelease)
 				printf("Mouse Released\n");
-			} 
 		}
 		clear_background(frame_buffer, 0x00000000);
 		float cx = (float)w_width / 2.0f; 
@@ -344,13 +343,34 @@ int main()
 				0xFF0000FF
 			},
 		};
-		Vertex proj_triangle[3] = {
-		  {{-1, -1, 0}, 0xFF0000FF},
-		  {{ 1, -1, 0}, 0xFF0000FF},
-		  {{ 0,  1, 0}, 0xFF0000FF},
+		cx = w_width * 0.5f;
+		cy = w_height * 0.5f;
+		float s  = 100.0f;
+		Vertex rot_tri[3] = {
+		  {
+				{cx - s, cy - s * 0.2f, 1.0f}, 
+				0xFFFF0000
+			}, 
+		  {
+				{cx + s, cy, 1.0f}, 
+				0xFF00FF00
+			}, 
+		  {
+				{cx - s*0.2f, cy + s, 1.0f}, 
+				0xFF0000FF
+			},
 		};
+
+		Mat4 trans = translate(x, y, 0.0f);
+		Mat4 rot = rotate_z(r);
+		// rot_tri[0].pos = vec3(transform(vec4(rot_tri[0].pos), rot));
+		// rot_tri[1].pos = vec3(transform(vec4(rot_tri[1].pos), rot));
+		// rot_tri[2].pos = vec3(transform(vec4(rot_tri[2].pos), rot));
+		triangle[0].pos = vec3(transform(vec4(triangle[0].pos), trans));
+		triangle[1].pos = vec3(transform(vec4(triangle[1].pos), trans));
+		triangle[2].pos = vec3(transform(vec4(triangle[2].pos), trans));
 		draw_triangles(frame_buffer, triangle, 1);
-		draw_triangles(frame_buffer, depth_test, 2);
+		// draw_triangles(frame_buffer, depth_test, 2);
 		// draw_triangles(frame_buffer, proj_triangle, 1);
 
 		XImage *img = XCreateImage(
