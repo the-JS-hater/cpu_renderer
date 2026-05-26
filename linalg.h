@@ -28,6 +28,7 @@ float cross_product2D(Vec2 v, Vec2 u);
 Vec3 vec3(Vec4 v);
 Vec4 vec4(Vec3 v);
 float vec_length(Vec3 v);
+Vec3 norm(Vec3 v);
 float dot(Vec3 v, Vec3 u);
 Vec3 cross_product(Vec3 v, Vec3 u);
 Mat3 trans_mat3(Mat3 const *mat);

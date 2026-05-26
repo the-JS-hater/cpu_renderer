@@ -24,6 +24,12 @@ float dot(Vec3 v, Vec3 u)
 	return v.x*u.x + v.y*u.y + v.z*u.z;
 }
 
+Vec3 norm(Vec3 v)
+{
+	float m = vec_length(v);
+	return (Vec3){v.x/m, v.y/m, v.z/m}; 
+}
+
 Vec3 cross_product(Vec3 v, Vec3 u)
 {
 	return (Vec3){

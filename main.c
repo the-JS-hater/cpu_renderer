@@ -36,7 +36,7 @@ typedef uint32_t Color;
 
 typedef struct 
 {
-	Vec3 pos;
+	Vec3 pos, up, look_at;
 } Camera;
 
 typedef struct
@@ -44,6 +44,11 @@ typedef struct
 	Vec3 pos;
 	Color color;
 } Vertex;
+
+Mat4 look_at(Camera cam)
+{
+	return (Mat4){0};
+};
 
 void clear_background(FrameBuffer *frame_buffer, Color color)
 {
