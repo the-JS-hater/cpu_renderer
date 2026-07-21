@@ -268,7 +268,8 @@ int main()
 
 		static float x = 0.0f, y = 0.0f, r = 1.0f;
 		
-		while (XPending(display) > 0) {
+		while (XPending(display) > 0) 
+		{
 			XEvent event = {0};
 			XNextEvent(display, &event);
 			if (event.type == KeyPress) 
