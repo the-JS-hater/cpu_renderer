@@ -32,24 +32,62 @@ typedef struct {
   Color color;
 } Vertex;
 
+typedef struct {
+  Vertex *verts;
+  size_t  vertex_count;
+  size_t *indices;
+  size_t  index_count;
+} Mesh;
+
+typedef struct {
+  Mesh mesh;
+  Mat4 mtw;
+} Model;
+
 typedef enum {
-  KEY_ESC = 9,
-  KEY_W   = 25,
-  KEY_A   = 38,
-  KEY_S   = 39,
-  KEY_D   = 40,
-  KEY_R   = 27,
+  KEY_ESC        = 9,
+  KEY_LEFT_SHIFT = 50,
+  KEY_LEFT_CTRL  = 37,
+  KEY_W          = 25,
+  KEY_A          = 38,
+  KEY_S          = 39,
+  KEY_D          = 40,
+  KEY_R          = 27,
 } KEY_ENUM;
+
+// TODO: replace with bitfield later on
+typedef struct {
+  bool w;
+  bool a;
+  bool s;
+  bool d;
+  bool shift;
+  bool ctrl;
+} InputState;
 
 // ============================================================================
 // PLUMBING & MISC
 // ============================================================================
 
+static struct timespec last_frame;
+
+double get_frame_delta()
+{
+  struct timespec current_frame;
+  clock_gettime(CLOCK_MONOTONIC, &current_frame);
+  double dt = (current_frame.tv_sec - last_frame.tv_sec) +
+              (current_frame.tv_nsec - last_frame.tv_nsec) / 1e9;
+
+
+  last_frame = current_frame;
+  return dt;
+}
+
 void parse_args(AppConfig *cfg, int argc, char *argv[])
 {
   if (argc < 3)
   {
-    perror("Too few args\n");
+    fprintf(stderr, "Too few args");
     exit(1);
   }
   cfg->win_w = strtol(argv[1], NULL, 10);
@@ -61,7 +99,7 @@ void create_window(AppConfig *cfg, char const *title)
   cfg->display = XOpenDisplay(NULL);
   if (!cfg->display)
   {
-    perror("Failed to open display\n");
+    fprintf(stderr, "Failed to open display");
     exit(1);
   }
   cfg->screen = DefaultScreen(cfg->display);
@@ -133,18 +171,47 @@ void draw_pixel(uint32_t const x,
   fb->data[idx] = color;
 }
 
-void draw_triangle(Vertex const *verts, FrameBuffer *fb, bool backface_culling)
+void draw_triangle(Vertex      *verts,
+                   size_t       idx1,
+                   size_t       idx2,
+                   size_t       idx3,
+                   FrameBuffer *fb,
+                   bool         backface_culling)
 {
-  // NOTE: Assumes vertices are projected in screen space
+  // NOTE: Assumes vertices are in clip space
 
-  Vec4 v1, v2, v3;
-  v1 = verts[0].pos;
-  v2 = verts[1].pos;
-  v3 = verts[2].pos;
-  Color c1, c2, c3;
-  c1 = verts[0].color;
-  c2 = verts[1].color;
-  c3 = verts[2].color;
+  Vertex v[3] = {
+    verts[idx1],
+    verts[idx2],
+    verts[idx3],
+  };
+
+  // reject triangles behind near plane
+  // TODO: properly clip triangles
+  if (v[0].pos.z < -v[0].pos.w || v[1].pos.z < -v[1].pos.w ||
+      v[2].pos.z < -v[2].pos.w)
+  {
+    return;
+  }
+
+  // Clip space -> NDC -> screen space
+  for (int i = 0; i < 3; i++)
+  {
+    v[i].pos.x /= v[i].pos.w;
+    v[i].pos.y /= v[i].pos.w;
+    v[i].pos.z /= v[i].pos.w;
+
+    v[i].pos.x = (v[i].pos.x + 1.0f) * 0.5f * fb->width;
+    v[i].pos.y = (1.0f - v[i].pos.y) * 0.5f * fb->height;
+  }
+
+  Vec4 v1 = v[0].pos;
+  Vec4 v2 = v[1].pos;
+  Vec4 v3 = v[2].pos;
+
+  Color c1 = v[0].color;
+  Color c2 = v[1].color;
+  Color c3 = v[2].color;
 
   int32_t xmin = fmin(v1.x, fmin(v2.x, v3.x));
   int32_t ymin = fmin(v1.y, fmin(v2.y, v3.y));
@@ -161,31 +228,65 @@ void draw_triangle(Vertex const *verts, FrameBuffer *fb, bool backface_culling)
   float      area = v12.x * v13.y - v12.y * v13.x;
   if (backface_culling && area >= 0) return;
 
-  for (size_t x = xmin; x < xmax; ++x)
-    for (size_t y = ymin; y < ymax; ++y)
+  for (size_t x = xmin; x <= xmax; ++x)
+    for (size_t y = ymin; y <= ymax; ++y)
     {
       Vec3  p  = new_vec3((float)x + 0.5f, (float)y + 0.5f, 0.0f);
-      float w0 = (v3.y - v2.y) * (p.x - v2.x) - (v3.x - v2.x) * (p.y - v2.y);
-      float w1 = (v1.y - v3.y) * (p.x - v3.x) - (v1.x - v3.x) * (p.y - v3.y);
-      float w2 = (v2.y - v1.y) * (p.x - v1.x) - (v2.x - v1.x) * (p.y - v1.y);
+      float w0 = (v3.x - v2.x) * (p.y - v2.y) - (v3.y - v2.y) * (p.x - v2.x);
+      float w1 = (v1.x - v3.x) * (p.y - v3.y) - (v1.y - v3.y) * (p.x - v3.x);
+      float w2 = (v2.x - v1.x) * (p.y - v1.y) - (v2.y - v1.y) * (p.x - v1.x);
 
       if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0))
       {
-        float b0 = w0 / area;
-        float b1 = w1 / area;
-        float b2 = w2 / area;
-
-        float z = b0 * v1.z + b1 * v2.z + b2 * v3.z;
+        float bw0 = w0 / area;
+        float bw1 = w1 / area;
+        float bw2 = w2 / area;
+        float z   = bw0 * v1.z + bw1 * v2.z + bw2 * v3.z;
 
         size_t idx = y * fb->width + x;
-
         if (z >= fb->depth_buffer[idx]) continue;
 
+        // Color interpolation
+        uint8_t r1 = (c1 >> 24) & 0xFF;
+        uint8_t g1 = (c1 >> 16) & 0xFF;
+        uint8_t b1 = (c1 >> 8) & 0xFF;
+        uint8_t a1 = (c1 >> 0) & 0xFF;
+
+        uint8_t r2 = (c2 >> 24) & 0xFF;
+        uint8_t g2 = (c2 >> 16) & 0xFF;
+        uint8_t b2 = (c2 >> 8) & 0xFF;
+        uint8_t a2 = (c2 >> 0) & 0xFF;
+
+        uint8_t r3 = (c3 >> 24) & 0xFF;
+        uint8_t g3 = (c3 >> 16) & 0xFF;
+        uint8_t b3 = (c3 >> 8) & 0xFF;
+        uint8_t a3 = (c3 >> 0) & 0xFF;
+
+        uint8_t r = (uint8_t)(bw0 * r1 + bw1 * r2 + bw2 * r3);
+        uint8_t g = (uint8_t)(bw0 * g1 + bw1 * g2 + bw2 * g3);
+        uint8_t b = (uint8_t)(bw0 * b1 + bw1 * b2 + bw2 * b3);
+        uint8_t a = (uint8_t)(bw0 * a1 + bw1 * a2 + bw2 * a3);
+
+        Color c = ((uint32_t)r << 24) | ((uint32_t)g << 16) |
+                  ((uint32_t)b << 8) | ((uint32_t)a << 0);
+
         fb->depth_buffer[idx] = z;
-        draw_pixel(x, y, c1, fb);
+        draw_pixel(x, y, c, fb);
       }
     }
 }
+
+void draw_mesh(Mesh *mesh, FrameBuffer *fb, bool backface_culling)
+{
+  for (size_t offset = 0; offset < mesh->index_count; offset += 3)
+  {
+    size_t idx1 = mesh->indices[offset];
+    size_t idx2 = mesh->indices[offset + 1];
+    size_t idx3 = mesh->indices[offset + 2];
+    draw_triangle(mesh->verts, idx1, idx2, idx3, fb, backface_culling);
+  }
+}
+
 
 Mat4 look_at(Vec3 pos, Vec3 target, Vec3 up)
 {
@@ -241,28 +342,53 @@ void clear_background(FrameBuffer *frame_buffer, Color color)
 // INPUT
 // ============================================================================
 
-void poll_input(AppConfig *cfg, bool *quit, Vec3 *camera_pos)
+void poll_input(AppConfig *cfg, bool *quit, InputState *input)
 {
   while (XPending(cfg->display) > 0)
   {
     XEvent event = {0};
     XNextEvent(cfg->display, &event);
+
     if (event.type == KeyPress)
     {
-      printf("Key pressed: %d\n", event.xkey.keycode);
       switch (event.xkey.keycode)
       {
         case KEY_ESC: *quit = true; break;
-        case KEY_W: camera_pos->z -= 0.03; break;
-        case KEY_A: camera_pos->x -= 0.03; break;
-        case KEY_S: camera_pos->z += 0.03; break;
-        case KEY_D: camera_pos->x += 0.03; break;
+        case KEY_W: input->w = true; break;
+        case KEY_A: input->a = true; break;
+        case KEY_S: input->s = true; break;
+        case KEY_D: input->d = true; break;
+        case KEY_LEFT_SHIFT: input->shift = true; break;
+        case KEY_LEFT_CTRL: input->ctrl = true; break;
       }
     }
-    if (event.type == ButtonPress) printf("Mouse pressed\n");
 
-    if (event.type == ButtonRelease) printf("Mouse Released\n");
+    if (event.type == KeyRelease)
+    {
+      switch (event.xkey.keycode)
+      {
+        case KEY_W: input->w = false; break;
+        case KEY_A: input->a = false; break;
+        case KEY_S: input->s = false; break;
+        case KEY_D: input->d = false; break;
+        case KEY_LEFT_SHIFT: input->shift = false; break;
+        case KEY_LEFT_CTRL: input->ctrl = false; break;
+      }
+    }
   }
+}
+
+void update_camera(Vec3 *camera_pos, InputState const *input, double dt)
+{
+  float speed = 2.5 * dt;
+
+  if (input->w) camera_pos->z -= speed;
+  if (input->s) camera_pos->z += speed;
+  if (input->a) camera_pos->x -= speed;
+  if (input->d) camera_pos->x += speed;
+
+  if (input->shift) camera_pos->y += speed;
+  if (input->ctrl) camera_pos->y -= speed;
 }
 
 // ============================================================================
@@ -298,63 +424,78 @@ int main(int argc, char *argv[])
          x_img->green_mask,
          x_img->blue_mask);
 
-  struct timespec tw1;  // both C11 and POSIX
-  clock_t         t1 = clock();
 
-  static bool quit         = false;
-  Vec3        camera_pos   = (Vec3){0.0f, 0.0f, 10.0f};
-  Vec3        camera_front = (Vec3){0.0f, 0.0f, -1.0f};
-  Vec3        camera_up    = (Vec3){0.0f, 1.0f, 0.0f};
+  Vec3 camera_pos   = (Vec3){0.0f, 0.0f, 10.0f};
+  Vec3 camera_front = (Vec3){0.0f, 0.0f, -1.0f};
+  Vec3 camera_up    = (Vec3){0.0f, 1.0f, 0.0f};
+
+  clock_gettime(CLOCK_MONOTONIC, &last_frame);
+
+  InputState  input_state = {0};
+  static bool quit        = false;
   while (!quit)
   {
+    // WARN: only call once per frame
+    double const dt = get_frame_delta();
+    // printf("frame time: %f\n", df);
 
-    poll_input(cfg, &quit, &camera_pos);
+    poll_input(cfg, &quit, &input_state);
+    update_camera(&camera_pos, &input_state, dt);
 
     clear_background(frame_buffer, 0xFF000000);
 
-    Vertex triangle[3] = {
-      {new_vec4(-1.0f, -1.0f, 0.0f, 1.0f), 0xFFFF0000},
-      {new_vec4(1.0f,  -1.0f, 0.0f, 1.0f), 0xFF00FF00},
-      {new_vec4(0.0f,  1.0f,  0.0f, 1.0f), 0xFF0000FF},
+    Vertex pyramid_vertices[] = {
+      // 0: top
+      {new_vec4(0.0f,  1.0f,  0.0f,  1.0f), 0xFFFF0000},
+
+      // 1-4: base corners
+      {new_vec4(-1.0f, -1.0f, 1.0f,  1.0f), 0xFF00FF00},
+      {new_vec4(1.0f,  -1.0f, 1.0f,  1.0f), 0xFF0000FF},
+      {new_vec4(1.0f,  -1.0f, -1.0f, 1.0f), 0xFFFFFF00},
+      {new_vec4(-1.0f, -1.0f, -1.0f, 1.0f), 0xFFFF00FF},
     };
 
-    Vertex pyramid[18] = {
+    size_t pyramid_indices[] = {
       // front
-      {new_vec4(0.0f,  1.0f,  0.0f,  1.0f), 0xFFFF0000},
-      {new_vec4(-1.0f, -1.0f, 1.0f,  1.0f), 0xFFFF0000},
-      {new_vec4(1.0f,  -1.0f, 1.0f,  1.0f), 0xFFFF0000},
-
+      0,
+      1,
+      2,
       // right
-      {new_vec4(0.0f,  1.0f,  0.0f,  1.0f), 0xFF00FF00},
-      {new_vec4(1.0f,  -1.0f, 1.0f,  1.0f), 0xFF00FF00},
-      {new_vec4(1.0f,  -1.0f, -1.0f, 1.0f), 0xFF00FF00},
-
+      0,
+      2,
+      3,
       // back
-      {new_vec4(0.0f,  1.0f,  0.0f,  1.0f), 0xFF0000FF},
-      {new_vec4(1.0f,  -1.0f, -1.0f, 1.0f), 0xFF0000FF},
-      {new_vec4(-1.0f, -1.0f, -1.0f, 1.0f), 0xFF0000FF},
-
+      0,
+      3,
+      4,
       // left
-      {new_vec4(0.0f,  1.0f,  0.0f,  1.0f), 0xFFFFFF00},
-      {new_vec4(-1.0f, -1.0f, -1.0f, 1.0f), 0xFFFFFF00},
-      {new_vec4(-1.0f, -1.0f, 1.0f,  1.0f), 0xFFFFFF00},
+      0,
+      4,
+      1,
+      // bottom
+      1,
+      4,
+      3,
+      1,
+      3,
+      2,
+    };
 
-      // base triangle 1
-      {new_vec4(-1.0f, -1.0f, 1.0f,  1.0f), 0xFF00FFFF},
-      {new_vec4(-1.0f, -1.0f, -1.0f, 1.0f), 0xFF00FFFF},
-      {new_vec4(1.0f,  -1.0f, -1.0f, 1.0f), 0xFF00FFFF},
-
-      // base triangle 2
-      {new_vec4(-1.0f, -1.0f, 1.0f,  1.0f), 0xFFFF00FF},
-      {new_vec4(1.0f,  -1.0f, -1.0f, 1.0f), 0xFFFF00FF},
-      {new_vec4(1.0f,  -1.0f, 1.0f,  1.0f), 0xFFFF00FF},
+    Mesh pyramid_mesh = {
+      pyramid_vertices,
+      sizeof(pyramid_vertices) / sizeof(pyramid_vertices[0]),
+      pyramid_indices,
+      sizeof(pyramid_indices) / sizeof(pyramid_indices[0]),
     };
 
     // model-to-world
-    clock_t t2    = clock();
-    double  dur   = 1.0 * (t2 - t1) / CLOCKS_PER_SEC;
-    Mat4    model = rotate_y(dur);
-    // Mat4 model = identity();
+    static double r = 0.0f;
+    r += 0.001 * dt;
+    Mat4 model = rotate_y(r);
+
+    Model pyramid_model;
+    pyramid_model.mesh = pyramid_mesh;
+    pyramid_model.mtw  = rotate_y(r);
 
     // world-to-view
     Mat4 view =
@@ -365,38 +506,19 @@ int main(int argc, char *argv[])
     float aspect     = ((float)cfg->win_w / (float)cfg->win_h);
     Mat4  projection = perspective(fov * (M_PI / 180.0f), aspect, near, far);
 
-    // for (unsigned i = 0; i < 3; ++i)
-    // {
-    //   // model -> world -> view -> projection
-    //   triangle[i].pos = transform(model, triangle[i].pos);
-    //   triangle[i].pos = transform(view, triangle[i].pos);
-    //   triangle[i].pos = transform(projection, triangle[i].pos);
-    //   // NDC coordinates
-    //   triangle[i].pos.x /= triangle[i].pos.w;
-    //   triangle[i].pos.y /= triangle[i].pos.w;
-    //   triangle[i].pos.z /= triangle[i].pos.w;
-    //   // Device/display coordinates
-    //   triangle[i].pos.x = (triangle[i].pos.x + 1.0f) * 0.5f * cfg->win_w;
-    //   triangle[i].pos.y = (1.0f - triangle[i].pos.y) * 0.5f * cfg->win_h;
-    // }
-    // draw_triangle(triangle, frame_buffer, false);
-    for (unsigned i = 0; i < 18; ++i)
+    // Draw model
     {
-      // model -> world -> view -> projection
-      pyramid[i].pos = transform(model, pyramid[i].pos);
-      pyramid[i].pos = transform(view, pyramid[i].pos);
-      pyramid[i].pos = transform(projection, pyramid[i].pos);
-      // NDC coordinates
-      pyramid[i].pos.x /= pyramid[i].pos.w;
-      pyramid[i].pos.y /= pyramid[i].pos.w;
-      pyramid[i].pos.z /= pyramid[i].pos.w;
-      // Device/display coordinates
-      pyramid[i].pos.x = (pyramid[i].pos.x + 1.0f) * 0.5f * cfg->win_w;
-      pyramid[i].pos.y = (1.0f - pyramid[i].pos.y) * 0.5f * cfg->win_h;
+      for (size_t i = 0; i < pyramid_model.mesh.vertex_count; ++i)
+      {
+        pyramid_mesh.verts[i].pos =
+          transform(pyramid_model.mtw, pyramid_model.mesh.verts[i].pos);
+        pyramid_mesh.verts[i].pos =
+          transform(view, pyramid_model.mesh.verts[i].pos);
+        pyramid_mesh.verts[i].pos =
+          transform(projection, pyramid_model.mesh.verts[i].pos);
+      }
+      draw_mesh(&pyramid_model.mesh, frame_buffer, true);
     }
-
-    for (unsigned i = 0; i < 6; ++i)
-      draw_triangle(pyramid + (i * 3), frame_buffer, true);
 
     update_window(cfg, x_img);
   };
