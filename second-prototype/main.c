@@ -19,10 +19,10 @@ typedef struct {
 } AppConfig;
 
 typedef struct {
-  // TODO: double buffering
-  uint32_t *data;
-  float    *depth_buffer;
+  uint32_t *color_buffer[2];
+  float    *depth_buffer[2];
   uint32_t  width, height;
+  uint8_t   draw_idx;
 } FrameBuffer;
 
 typedef uint32_t Color;
@@ -129,19 +129,24 @@ void close_window(AppConfig *cfg)
 
 FrameBuffer *init_framebuffer(uint32_t width, uint32_t height)
 {
-  FrameBuffer *frame_buffer = calloc(1, sizeof(FrameBuffer));
-  uint32_t    *data         = calloc(1, width * height * sizeof(uint32_t));
-  float       *depth_buffer = calloc(1, width * height * sizeof(float));
+  FrameBuffer *frame_buffer  = calloc(1, sizeof(FrameBuffer));
+  uint32_t    *color_buffer0 = calloc(1, width * height * sizeof(uint32_t));
+  uint32_t    *color_buffer1 = calloc(1, width * height * sizeof(uint32_t));
+  float       *depth_buffer0 = calloc(1, width * height * sizeof(float));
+  float       *depth_buffer1 = calloc(1, width * height * sizeof(float));
 
-  frame_buffer->width        = width;
-  frame_buffer->height       = height;
-  frame_buffer->data         = data;
-  frame_buffer->depth_buffer = depth_buffer;
+  frame_buffer->width           = width;
+  frame_buffer->height          = height;
+  frame_buffer->draw_idx        = 0;
+  frame_buffer->color_buffer[0] = color_buffer0;
+  frame_buffer->depth_buffer[0] = depth_buffer0;
+  frame_buffer->color_buffer[1] = color_buffer1;
+  frame_buffer->depth_buffer[1] = depth_buffer1;
 
   return frame_buffer;
 }
 
-void update_window(AppConfig const *cfg, XImage *x_img)
+void update_window(AppConfig const *cfg, XImage *x_img, FrameBuffer *fb)
 {
   XPutImage(cfg->display,
             cfg->window,
@@ -154,6 +159,8 @@ void update_window(AppConfig const *cfg, XImage *x_img)
             cfg->win_w,
             cfg->win_h);
   XFlush(cfg->display);
+  fb->draw_idx = !fb->draw_idx;
+  x_img->data  = (char *)fb->color_buffer[fb->draw_idx];
 }
 
 // ============================================================================
@@ -168,7 +175,7 @@ void draw_pixel(uint32_t const x,
   size_t const idx  = y * fb->width + x;
   size_t const size = fb->width * fb->height;
   if (idx >= size) return;
-  fb->data[idx] = color;
+  fb->color_buffer[fb->draw_idx][idx] = color;
 }
 
 void draw_triangle(Vertex      *verts,
@@ -244,7 +251,7 @@ void draw_triangle(Vertex      *verts,
         float z   = bw0 * v1.z + bw1 * v2.z + bw2 * v3.z;
 
         size_t idx = y * fb->width + x;
-        if (z >= fb->depth_buffer[idx]) continue;
+        if (z >= fb->depth_buffer[fb->draw_idx][idx]) continue;
 
         // Color interpolation
         uint8_t r1 = (c1 >> 24) & 0xFF;
@@ -270,7 +277,7 @@ void draw_triangle(Vertex      *verts,
         Color c = ((uint32_t)r << 24) | ((uint32_t)g << 16) |
                   ((uint32_t)b << 8) | ((uint32_t)a << 0);
 
-        fb->depth_buffer[idx] = z;
+        fb->depth_buffer[fb->draw_idx][idx] = z;
         draw_pixel(x, y, c, fb);
       }
     }
@@ -330,12 +337,13 @@ Mat4 look_at(Vec3 pos, Vec3 target, Vec3 up)
   return mat4_mult(a, b);
 }
 
-void clear_background(FrameBuffer *frame_buffer, Color color)
+void clear_background(FrameBuffer *fb, Color color)
 {
-  int const size = frame_buffer->width * frame_buffer->height;
+  int const size = fb->width * fb->height;
 
-  for (unsigned i = 0; i < size; ++i) frame_buffer->data[i] = color;
-  for (unsigned i = 0; i < size; ++i) frame_buffer->depth_buffer[i] = INFINITY;
+  for (unsigned i = 0; i < size; ++i) fb->color_buffer[fb->draw_idx][i] = color;
+  for (unsigned i = 0; i < size; ++i)
+    fb->depth_buffer[fb->draw_idx][i] = INFINITY;
 }
 
 // ============================================================================
@@ -406,14 +414,14 @@ int main(int argc, char *argv[])
   parse_args(cfg, argc, argv);
   create_window(cfg, "CPU RENDERING PROTOTYPE V2");
 
-  FrameBuffer *frame_buffer = init_framebuffer(cfg->win_w, cfg->win_h);
+  FrameBuffer *fb = init_framebuffer(cfg->win_w, cfg->win_h);
 
   XImage *x_img = XCreateImage(cfg->display,
                                cfg->visual,
                                cfg->depth,
                                ZPixmap,
                                0,
-                               (char *)frame_buffer->data,
+                               (char *)fb->color_buffer[fb->draw_idx],
                                cfg->win_w,
                                cfg->win_h,
                                32,
@@ -442,7 +450,7 @@ int main(int argc, char *argv[])
     poll_input(cfg, &quit, &input_state);
     update_camera(&camera_pos, &input_state, dt);
 
-    clear_background(frame_buffer, 0xFF000000);
+    clear_background(fb, 0xFF000000);
 
     Vertex pyramid_vertices[] = {
       // 0: top
@@ -517,10 +525,9 @@ int main(int argc, char *argv[])
         pyramid_mesh.verts[i].pos =
           transform(projection, pyramid_model.mesh.verts[i].pos);
       }
-      draw_mesh(&pyramid_model.mesh, frame_buffer, true);
+      draw_mesh(&pyramid_model.mesh, fb, true);
     }
-
-    update_window(cfg, x_img);
+    update_window(cfg, x_img, fb);
   };
   close_window(cfg);
   return 0;
