@@ -6,9 +6,8 @@ CFLAGS=-Wall
 SOURCES=$(shell find . -name "*.c")
 OBJECTS=$(SOURCES:.c=.o)
 HEADERS=$(wildcard *.h)
-WIN_H=640
-WIN_W=800
-
+WINDOW=1280x720
+RESOLUTION=800x640
 %.o: %.c $(HEADERS)
 	$(CC) $(CFLAGS) -c $< -o $@ 
 
@@ -21,7 +20,7 @@ $(TARGET): $(OBJECTS)
 default: $(TARGET)
 all: default
 run: all
-	./$(TARGET) $(WIN_W) $(WIN_H) 
+	./$(TARGET) -w $(WINDOW) -r $(RESOLUTION)
 
 clean:
 	-rm -f *.o
