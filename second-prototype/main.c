@@ -283,14 +283,27 @@ void draw_triangle(Vertex      *verts,
     }
 }
 
-void draw_mesh(Mesh *mesh, FrameBuffer *fb, bool backface_culling)
+void draw_model(Model const *model,
+                Mat4 const  *view,
+                Mat4 const  *projection,
+                FrameBuffer *fb,
+                bool         backface_culling)
 {
-  for (size_t offset = 0; offset < mesh->index_count; offset += 3)
+  Vertex transformed[model->mesh.vertex_count];
+
+  for (size_t i = 0; i < model->mesh.vertex_count; ++i)
   {
-    size_t idx1 = mesh->indices[offset];
-    size_t idx2 = mesh->indices[offset + 1];
-    size_t idx3 = mesh->indices[offset + 2];
-    draw_triangle(mesh->verts, idx1, idx2, idx3, fb, backface_culling);
+    transformed[i]     = model->mesh.verts[i];
+    transformed[i].pos = transform(model->mtw, transformed[i].pos);
+    transformed[i].pos = transform(*view, transformed[i].pos);
+    transformed[i].pos = transform(*projection, transformed[i].pos);
+  }
+  for (size_t offset = 0; offset < model->mesh.index_count; offset += 3)
+  {
+    size_t idx1 = model->mesh.indices[offset];
+    size_t idx2 = model->mesh.indices[offset + 1];
+    size_t idx3 = model->mesh.indices[offset + 2];
+    draw_triangle(transformed, idx1, idx2, idx3, fb, backface_culling);
   }
 }
 
@@ -498,7 +511,7 @@ int main(int argc, char *argv[])
 
     // model-to-world
     static double r = 0.0f;
-    r += 0.001 * dt;
+    r += dt;
     Mat4 model = rotate_y(r);
 
     Model pyramid_model;
@@ -515,18 +528,8 @@ int main(int argc, char *argv[])
     Mat4  projection = perspective(fov * (M_PI / 180.0f), aspect, near, far);
 
     // Draw model
-    {
-      for (size_t i = 0; i < pyramid_model.mesh.vertex_count; ++i)
-      {
-        pyramid_mesh.verts[i].pos =
-          transform(pyramid_model.mtw, pyramid_model.mesh.verts[i].pos);
-        pyramid_mesh.verts[i].pos =
-          transform(view, pyramid_model.mesh.verts[i].pos);
-        pyramid_mesh.verts[i].pos =
-          transform(projection, pyramid_model.mesh.verts[i].pos);
-      }
-      draw_mesh(&pyramid_model.mesh, fb, true);
-    }
+    draw_model(&pyramid_model, &view, &projection, fb, true);
+
     update_window(cfg, x_img, fb);
   };
   close_window(cfg);
