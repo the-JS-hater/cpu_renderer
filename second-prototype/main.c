@@ -39,9 +39,17 @@ typedef struct {
 
 typedef uint32_t Color;
 
+typedef enum {
+  COLOR_R,
+  COLOR_G,
+  COLOR_B,
+  COLOR_A,
+  MAX_VARYING_ATTRS,
+} AttributeEnum;
+
 typedef struct {
   Vec4  pos;
-  Color color;
+  float varying[MAX_VARYING_ATTRS];
 } Vertex;
 
 typedef struct {
@@ -260,6 +268,16 @@ void draw_pixel(uint32_t const x,
   fb->color_buffer[fb->draw_idx][idx] = color;
 }
 
+uint32_t pack_color(float const *v)
+{
+  uint32_t r = (uint32_t)(v[COLOR_R] * 255.0f);
+  uint32_t g = (uint32_t)(v[COLOR_G] * 255.0f);
+  uint32_t b = (uint32_t)(v[COLOR_B] * 255.0f);
+  uint32_t a = (uint32_t)(v[COLOR_A] * 255.0f);
+
+  return (a << 24) | (r << 16) | (g << 8) | b;
+}
+
 void draw_triangle(Vertex      *verts,
                    size_t       idx1,
                    size_t       idx2,
@@ -298,10 +316,6 @@ void draw_triangle(Vertex      *verts,
   Vec4 v2 = v[1].pos;
   Vec4 v3 = v[2].pos;
 
-  Color c1 = v[0].color;
-  Color c2 = v[1].color;
-  Color c3 = v[2].color;
-
   int32_t xmin = fmin(v1.x, fmin(v2.x, v3.x));
   int32_t ymin = fmin(v1.y, fmin(v2.y, v3.y));
   int32_t xmax = fmax(v1.x, fmax(v2.x, v3.x));
@@ -335,29 +349,13 @@ void draw_triangle(Vertex      *verts,
         size_t idx = y * fb->width + x;
         if (z >= fb->depth_buffer[fb->draw_idx][idx]) continue;
 
-        // Color interpolation
-        uint8_t r1 = (c1 >> 24) & 0xFF;
-        uint8_t g1 = (c1 >> 16) & 0xFF;
-        uint8_t b1 = (c1 >> 8) & 0xFF;
-        uint8_t a1 = (c1 >> 0) & 0xFF;
-
-        uint8_t r2 = (c2 >> 24) & 0xFF;
-        uint8_t g2 = (c2 >> 16) & 0xFF;
-        uint8_t b2 = (c2 >> 8) & 0xFF;
-        uint8_t a2 = (c2 >> 0) & 0xFF;
-
-        uint8_t r3 = (c3 >> 24) & 0xFF;
-        uint8_t g3 = (c3 >> 16) & 0xFF;
-        uint8_t b3 = (c3 >> 8) & 0xFF;
-        uint8_t a3 = (c3 >> 0) & 0xFF;
-
-        uint8_t r = (uint8_t)(bw0 * r1 + bw1 * r2 + bw2 * r3);
-        uint8_t g = (uint8_t)(bw0 * g1 + bw1 * g2 + bw2 * g3);
-        uint8_t b = (uint8_t)(bw0 * b1 + bw1 * b2 + bw2 * b3);
-        uint8_t a = (uint8_t)(bw0 * a1 + bw1 * a2 + bw2 * a3);
-
-        Color c = ((uint32_t)r << 24) | ((uint32_t)g << 16) |
-                  ((uint32_t)b << 8) | ((uint32_t)a << 0);
+        float varying[MAX_VARYING_ATTRS];
+        for (int i = 0; i < MAX_VARYING_ATTRS; ++i)
+        {
+          varying[i] = bw0 * v[0].varying[i] + bw1 * v[1].varying[i] +
+                       bw2 * v[2].varying[i];
+        }
+        Color c = pack_color(varying);
 
         fb->depth_buffer[fb->draw_idx][idx] = z;
         draw_pixel(x, y, c, fb);
@@ -503,16 +501,16 @@ void update_camera(Camera *camera, InputState const *input, double dt)
   float const speed             = 2.5 * dt;
   float const mouse_sensitivity = 0.005f * dt;
 
-  float yaw   = input->mouse_dx * mouse_sensitivity;
-  float pitch = input->mouse_dy * mouse_sensitivity;
+  float const yaw      = input->mouse_dx * mouse_sensitivity;
+  float const pitch    = input->mouse_dy * mouse_sensitivity;
+  Vec3 const  world_up = {0.0f, 1.0f, 0.0f};
+  Vec3 const  right    = vec3_norm(cross(camera->camera_front, world_up));
+
   camera->camera_front =
     vec3(transform_vec3(rotate_x(pitch), camera->camera_front));
   camera->camera_front =
     vec3(transform_vec3(rotate_y(yaw), camera->camera_front));
   camera->camera_front = vec3_norm(camera->camera_front);
-
-  Vec3 const world_up = {0.0f, 1.0f, 0.0f};
-  Vec3 const right    = vec3_norm(cross(camera->camera_front, world_up));
 
   if (input->w)
     camera->camera_pos =
@@ -572,6 +570,52 @@ int main(int argc, char *argv[])
          render_img->red_mask,
          render_img->green_mask,
          render_img->blue_mask);
+
+  // TEMPORARY PYRAMID SETUP: START
+  Vertex pyramid_vertices[] = {
+    // 0: top
+    {new_vec4(0.0f,  1.0f,  0.0f,  1.0f), {1.0, 0.0, 0.0, 1.0}},
+    // 1-4: base corners
+    {new_vec4(-1.0f, -1.0f, 1.0f,  1.0f), {0.0, 1.0, 0.0, 1.0}},
+    {new_vec4(1.0f,  -1.0f, 1.0f,  1.0f), {0.0, 0.0, 1.0, 1.0}},
+    {new_vec4(1.0f,  -1.0f, -1.0f, 1.0f), {1.0, 1.0, 0.0, 1.0}},
+    {new_vec4(-1.0f, -1.0f, -1.0f, 1.0f), {0.0, 1.0, 1.0, 1.0}},
+  };
+  size_t pyramid_indices[] = {
+    // front
+    0,
+    1,
+    2,
+    // right
+    0,
+    2,
+    3,
+    // back
+    0,
+    3,
+    4,
+    // left
+    0,
+    4,
+    1,
+    // bottom
+    1,
+    4,
+    3,
+    1,
+    3,
+    2,
+  };
+  Mesh pyramid_mesh = {
+    pyramid_vertices,
+    sizeof(pyramid_vertices) / sizeof(pyramid_vertices[0]),
+    pyramid_indices,
+    sizeof(pyramid_indices) / sizeof(pyramid_indices[0]),
+  };
+  Model pyramid_model;
+  pyramid_model.mesh = pyramid_mesh;
+  // TEMPORARY PYRAMID SETUP: END
+
   Camera camera = {
     (Vec3){0.0f, 1.0f, 0.0f },
     (Vec3){0.0f, 0.0f, -1.0f},
@@ -593,58 +637,12 @@ int main(int argc, char *argv[])
 
     clear_background(fb, 0xFFFFFFFF);
 
-    Vertex pyramid_vertices[] = {
-      // 0: top
-      {new_vec4(0.0f,  1.0f,  0.0f,  1.0f), 0xFFFF0000},
-
-      // 1-4: base corners
-      {new_vec4(-1.0f, -1.0f, 1.0f,  1.0f), 0xFF00FF00},
-      {new_vec4(1.0f,  -1.0f, 1.0f,  1.0f), 0xFF0000FF},
-      {new_vec4(1.0f,  -1.0f, -1.0f, 1.0f), 0xFFFFFF00},
-      {new_vec4(-1.0f, -1.0f, -1.0f, 1.0f), 0xFFFF00FF},
-    };
-
-    size_t pyramid_indices[] = {
-      // front
-      0,
-      1,
-      2,
-      // right
-      0,
-      2,
-      3,
-      // back
-      0,
-      3,
-      4,
-      // left
-      0,
-      4,
-      1,
-      // bottom
-      1,
-      4,
-      3,
-      1,
-      3,
-      2,
-    };
-
-    Mesh pyramid_mesh = {
-      pyramid_vertices,
-      sizeof(pyramid_vertices) / sizeof(pyramid_vertices[0]),
-      pyramid_indices,
-      sizeof(pyramid_indices) / sizeof(pyramid_indices[0]),
-    };
-
     // model-to-world
     static double r = 0.0f;
     r += dt;
     Mat4 model = rotate_y(r);
 
-    Model pyramid_model;
-    pyramid_model.mesh = pyramid_mesh;
-    pyramid_model.mtw  = rotate_y(r);
+    pyramid_model.mtw = rotate_y(r);
 
     // world-to-view
     Mat4 view = look_at(camera.camera_pos,
