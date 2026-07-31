@@ -9,6 +9,7 @@
 #include <math.h>
 
 #include "linalg.h"
+#include "obj_loader.h"
 
 typedef struct {
   Window       window;
@@ -44,6 +45,9 @@ typedef enum {
   COLOR_G,
   COLOR_B,
   COLOR_A,
+  NORMAL_X,
+  NORMAL_Y,
+  NORMAL_Z,
   MAX_VARYING_ATTRS,
 } AttributeEnum;
 
@@ -251,6 +255,63 @@ void update_window(AppConfig const *cfg,
   XFlush(cfg->display);
   fb->draw_idx     = !fb->draw_idx;
   render_img->data = (char *)fb->color_buffer[fb->draw_idx];
+}
+
+Mesh mesh_from_obj(ObjObject const *obj)
+{
+  Mesh mesh         = {0};
+  mesh.vertex_count = obj->vertex_count;
+  mesh.index_count  = obj->face_count * 3;
+  mesh.verts        = calloc(mesh.vertex_count, sizeof(Vertex));
+  mesh.indices      = calloc(mesh.index_count, sizeof(size_t));
+
+  if (!mesh.verts || !mesh.indices)
+  {
+    free(mesh.verts);
+    free(mesh.indices);
+    return (Mesh){0};
+  }
+  for (size_t i = 0; i < obj->vertex_count; i++)
+  {
+    obj_Vertex const *pos = &obj->verts[i];
+
+    mesh.verts[i].pos = new_vec4(pos->x, pos->y, pos->z, pos->w);
+  }
+  size_t index = 0;
+  for (size_t i = 0; i < obj->face_count; i++)
+  {
+    obj_Face const *face = &obj->faces[i];
+    for (int j = 0; j < 3; j++)
+    {
+      obj_FaceElement const *e = &face->triangles[j];
+
+      size_t vertex_index   = e->v_i - 1;
+      mesh.indices[index++] = vertex_index;
+
+      if (e->vn_i > 0)
+      {
+        obj_Normal const *n = &obj->normals[e->vn_i - 1];
+
+        mesh.verts[vertex_index].varying[NORMAL_X] = n->x;
+        mesh.verts[vertex_index].varying[NORMAL_Y] = n->y;
+        mesh.verts[vertex_index].varying[NORMAL_Z] = n->z;
+      }
+    }
+  }
+  return mesh;
+}
+
+Model load_model(char const *filename)
+{
+  ObjObject obj = {0};
+  if (!load_obj_file(filename, &obj))
+  {
+    fprintf(stderr, "Failed to load model: %s\n", filename);
+    return (Model){0};
+  }
+  Model model = {.mesh = mesh_from_obj(&obj), .mtw = identity()};
+  free_obj_object(&obj);
+  return model;
 }
 
 // ============================================================================
@@ -571,50 +632,18 @@ int main(int argc, char *argv[])
          render_img->green_mask,
          render_img->blue_mask);
 
-  // TEMPORARY PYRAMID SETUP: START
-  Vertex pyramid_vertices[] = {
-    // 0: top
-    {new_vec4(0.0f,  1.0f,  0.0f,  1.0f), {1.0, 0.0, 0.0, 1.0}},
-    // 1-4: base corners
-    {new_vec4(-1.0f, -1.0f, 1.0f,  1.0f), {0.0, 1.0, 0.0, 1.0}},
-    {new_vec4(1.0f,  -1.0f, 1.0f,  1.0f), {0.0, 0.0, 1.0, 1.0}},
-    {new_vec4(1.0f,  -1.0f, -1.0f, 1.0f), {1.0, 1.0, 0.0, 1.0}},
-    {new_vec4(-1.0f, -1.0f, -1.0f, 1.0f), {0.0, 1.0, 1.0, 1.0}},
-  };
-  size_t pyramid_indices[] = {
-    // front
-    0,
-    1,
-    2,
-    // right
-    0,
-    2,
-    3,
-    // back
-    0,
-    3,
-    4,
-    // left
-    0,
-    4,
-    1,
-    // bottom
-    1,
-    4,
-    3,
-    1,
-    3,
-    2,
-  };
-  Mesh pyramid_mesh = {
-    pyramid_vertices,
-    sizeof(pyramid_vertices) / sizeof(pyramid_vertices[0]),
-    pyramid_indices,
-    sizeof(pyramid_indices) / sizeof(pyramid_indices[0]),
-  };
-  Model pyramid_model;
-  pyramid_model.mesh = pyramid_mesh;
-  // TEMPORARY PYRAMID SETUP: END
+  Model teapot_model = load_model("teapot.obj");
+  teapot_model.mtw   = identity();
+  // TEMP: normals as colors
+  for (size_t i = 0; i < teapot_model.mesh.vertex_count; i++)
+  {
+    Vertex *v = &teapot_model.mesh.verts[i];
+
+    v->varying[COLOR_R] = v->varying[NORMAL_X] * 0.5f + 0.5f;
+    v->varying[COLOR_G] = v->varying[NORMAL_Y] * 0.5f + 0.5f;
+    v->varying[COLOR_B] = v->varying[NORMAL_Z] * 0.5f + 0.5f;
+    v->varying[COLOR_A] = 1.0f;
+  }
 
   Camera camera = {
     (Vec3){0.0f, 1.0f, 0.0f },
@@ -640,9 +669,7 @@ int main(int argc, char *argv[])
     // model-to-world
     static double r = 0.0f;
     r += dt;
-    Mat4 model = rotate_y(r);
-
-    pyramid_model.mtw = rotate_y(r);
+    teapot_model.mtw = rotate_y(r);
 
     // world-to-view
     Mat4 view = look_at(camera.camera_pos,
@@ -655,7 +682,7 @@ int main(int argc, char *argv[])
     Mat4  projection = perspective(fov * (M_PI / 180.0f), aspect, near, far);
 
     // Draw model
-    draw_model(&pyramid_model, &view, &projection, fb, true);
+    draw_model(&teapot_model, &view, &projection, fb, true);
 
     update_window(cfg, render_img, disp_img, db, fb);
   };
