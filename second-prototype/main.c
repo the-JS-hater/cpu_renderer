@@ -276,7 +276,7 @@ void update_window(AppConfig const *cfg,
 Mesh mesh_from_obj(ObjObject const *obj)
 {
   Mesh mesh         = {0};
-  mesh.vertex_count = obj->vertex_count;
+  mesh.vertex_count = obj->face_count * 3;
   mesh.index_count  = obj->face_count * 3;
   mesh.verts        = calloc(mesh.vertex_count, sizeof(Vertex));
   mesh.indices      = calloc(mesh.index_count, sizeof(size_t));
@@ -287,37 +287,34 @@ Mesh mesh_from_obj(ObjObject const *obj)
     free(mesh.indices);
     return (Mesh){0};
   }
-  for (size_t i = 0; i < obj->vertex_count; i++)
-  {
-    obj_Vertex const *pos = &obj->verts[i];
-    mesh.verts[i].pos     = new_vec4(pos->x, pos->y, pos->z, pos->w);
-  }
-  size_t index = 0;
+
+  size_t out = 0;
   for (size_t i = 0; i < obj->face_count; i++)
   {
     obj_Face const *face = &obj->faces[i];
     for (int j = 0; j < 3; j++)
     {
-      obj_FaceElement const *e = &face->triangles[j];
-
-      size_t vertex_index   = e->v_i - 1;
-      mesh.indices[index++] = vertex_index;
+      obj_FaceElement const *e   = &face->triangles[j];
+      obj_Vertex const      *pos = &obj->verts[e->v_i - 1];
+      mesh.verts[out].pos        = new_vec4(pos->x, pos->y, pos->z, pos->w);
 
       if (e->vn_i > 0)
       {
         obj_Normal const *n = &obj->normals[e->vn_i - 1];
 
-        mesh.verts[vertex_index].varying[NORMAL_X] = n->x;
-        mesh.verts[vertex_index].varying[NORMAL_Y] = n->y;
-        mesh.verts[vertex_index].varying[NORMAL_Z] = n->z;
+        mesh.verts[out].varying[NORMAL_X] = n->x;
+        mesh.verts[out].varying[NORMAL_Y] = n->y;
+        mesh.verts[out].varying[NORMAL_Z] = n->z;
       }
       if (e->vt_i > 0)
       {
         obj_TexCoord const *t = &obj->uvs[e->vt_i - 1];
 
-        mesh.verts[vertex_index].varying[UV_U] = t->u;
-        mesh.verts[vertex_index].varying[UV_V] = t->v;
+        mesh.verts[out].varying[UV_U] = t->u;
+        mesh.verts[out].varying[UV_V] = t->v;
       }
+      mesh.indices[out] = out;
+      ++out;
     }
   }
   return mesh;
@@ -377,8 +374,8 @@ uint32_t sample_texture(Texture *tex, SampleMode mode, float u, float v)
 
   if (mode == CLAMP)
   {
-    x = x < 0 ? 0 : x > tex->width ? tex->width - 1 : x;
-    y = y < 0 ? 0 : y > tex->height ? tex->height - 1 : y;
+    x = x < 0 ? 0 : (x >= tex->width ? tex->width - 1 : x);
+    y = y < 0 ? 0 : (y >= tex->height ? tex->height - 1 : y);
   }
   if (mode == WRAP)
   {
@@ -701,6 +698,7 @@ int main(int argc, char *argv[])
   teapot_model.mtw   = identity();
   load_texture(&tex0, "textures/placeholder128x128.png");
   load_texture(&tex1, "textures/placeholder16x16.png");
+
   // TEMP: normals as colors
   for (size_t i = 0; i < teapot_model.mesh.vertex_count; i++)
   {
