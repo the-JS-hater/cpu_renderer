@@ -484,7 +484,7 @@ void draw_triangle(Vertex      *verts,
           sample_texture(&tex1, WRAP, varying[UV_U], varying[UV_V]);
 
         fb->depth_buffer[fb->draw_idx][idx] = z;
-        draw_pixel(x, y, texture_color, fb);
+        draw_pixel(x, y, normal_color, fb);
       }
     }
 }
@@ -750,7 +750,6 @@ int main(int argc, char *argv[])
 
     // Draw model
     draw_model(&teapot_model, &view, &projection, fb, true);
-
     update_window(cfg, render_img, disp_img, db, fb);
   };
   close_window(cfg);
