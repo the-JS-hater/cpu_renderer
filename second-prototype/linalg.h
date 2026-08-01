@@ -38,6 +38,7 @@ float vec3_length(Vec3);
 float vec3_dist(Vec3, Vec3);
 Vec3  cross(Vec3, Vec3);
 float dot3(Vec3, Vec3);
+float vec3_angle(Vec3, Vec3);
 
 Vec4  vec4_add_val(Vec4, float);
 Vec4  vec4_sub_val(Vec4, float);

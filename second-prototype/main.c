@@ -49,6 +49,9 @@ typedef enum {
   NORMAL_X,
   NORMAL_Y,
   NORMAL_Z,
+  SURFACE_X,
+  SURFACE_Y,
+  SURFACE_Z,
   UV_U,
   UV_V,
   MAX_VARYING_ATTRS,
@@ -297,6 +300,9 @@ Mesh mesh_from_obj(ObjObject const *obj)
       obj_FaceElement const *e   = &face->triangles[j];
       obj_Vertex const      *pos = &obj->verts[e->v_i - 1];
       mesh.verts[out].pos        = new_vec4(pos->x, pos->y, pos->z, pos->w);
+      mesh.verts[out].varying[SURFACE_X] = pos->x;
+      mesh.verts[out].varying[SURFACE_Y] = pos->y;
+      mesh.verts[out].varying[SURFACE_Z] = pos->z;
 
       if (e->vn_i > 0)
       {
@@ -525,14 +531,46 @@ void draw_triangle(Vertex      *verts,
             varying[i] = bw0 * tv[0].varying[i] + bw1 * tv[1].varying[i] +
                          bw2 * tv[2].varying[i];
           }
+
           Color normal_color = pack_color(varying[COLOR_R] * 255.0,
                                           varying[COLOR_G] * 255.0,
                                           varying[COLOR_B] * 255.0,
                                           varying[COLOR_A] * 255.0);
+
           Color texture_color =
             sample_texture(&tex1, WRAP, varying[UV_U], varying[UV_V]);
+
+          // PHONG LIGHTING
+          Vec3  light_pos           = new_vec3(0, 10, 0);
+          Vec3  light_color         = new_vec3(1.0, 0.1, 0.1);
+          Vec3  ambient_light_color = new_vec3(0.5, 0.5, 0.5);
+          float reflectivity        = 0.5;
+          Vec3  normal              = vec3_norm(
+            new_vec3(varying[NORMAL_X], varying[NORMAL_Y], varying[NORMAL_Z]));
+          Vec3 surface          = new_vec3(varying[SURFACE_X],
+                                  varying[SURFACE_Y],
+                                  varying[SURFACE_Z]);
+          Vec3 surface_to_light = vec3_norm(vec3_sub(light_pos, surface));
+
+          float n_dot_l = fmaxf(0.0f, dot3(normal, surface_to_light));
+
+          Vec3 ambient_light = vec3_mult_val(ambient_light_color, reflectivity);
+          Vec3 diffuse_light =
+            vec3_mult_val(vec3_mult_val(light_color, reflectivity), n_dot_l);
+          Vec3 total_light = vec3_add(ambient_light, diffuse_light);
+
+          total_light.x = fminf(1.0f, total_light.x);
+          total_light.y = fminf(1.0f, total_light.y);
+          total_light.z = fminf(1.0f, total_light.z);
+
+          Color phong_color = pack_color(total_light.x * 255.0f,
+                                         total_light.y * 255.0f,
+                                         total_light.z * 255.0f,
+                                         255.0f);
+
+
           fb->depth_buffer[fb->draw_idx][idx] = z;
-          draw_pixel(x, y, normal_color, fb);
+          draw_pixel(x, y, phong_color, fb);
         }
       }
   }
@@ -749,14 +787,16 @@ int main(int argc, char *argv[])
   load_texture(&tex0, "textures/placeholder128x128.png");
   load_texture(&tex1, "textures/placeholder16x16.png");
 
-  // TEMP: normals as colors
   for (size_t i = 0; i < teapot_model.mesh.vertex_count; i++)
   {
     Vertex *v = &teapot_model.mesh.verts[i];
 
-    v->varying[COLOR_R] = v->varying[NORMAL_X] * 0.5f + 0.5f;
-    v->varying[COLOR_G] = v->varying[NORMAL_Y] * 0.5f + 0.5f;
-    v->varying[COLOR_B] = v->varying[NORMAL_Z] * 0.5f + 0.5f;
+    // v->varying[COLOR_R] = v->varying[NORMAL_X] * 0.5f + 0.5f;
+    // v->varying[COLOR_G] = v->varying[NORMAL_Y] * 0.5f + 0.5f;
+    // v->varying[COLOR_B] = v->varying[NORMAL_Z] * 0.5f + 0.5f;
+    v->varying[COLOR_R] = 0.8f;
+    v->varying[COLOR_G] = 0.8f;
+    v->varying[COLOR_B] = 0.8f;
     v->varying[COLOR_A] = 1.0f;
   }
 
