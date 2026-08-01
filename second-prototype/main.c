@@ -5,6 +5,7 @@
 #include <string.h>
 #include <time.h>
 
+#include "include/stb_image.h"  //MAYBE: handroll png loader
 #include <X11/Xlib.h>
 #include <math.h>
 
@@ -48,6 +49,8 @@ typedef enum {
   NORMAL_X,
   NORMAL_Y,
   NORMAL_Z,
+  UV_U,
+  UV_V,
   MAX_VARYING_ATTRS,
 } AttributeEnum;
 
@@ -55,6 +58,13 @@ typedef struct {
   Vec4  pos;
   float varying[MAX_VARYING_ATTRS];
 } Vertex;
+
+typedef struct {
+  int            width, height, channels;  // stb_image uses int
+  unsigned char *data;
+} Texture;
+
+typedef enum { CLAMP, WRAP } SampleMode;
 
 typedef struct {
   Vertex *verts;
@@ -92,10 +102,16 @@ typedef struct {
 } InputState;
 
 // ============================================================================
-// PLUMBING & MISC
+// GLOBALS
 // ============================================================================
 
 static struct timespec last_frame;
+Texture                tex0;
+Texture                tex1;
+
+// ============================================================================
+// PLUMBING & MISC
+// ============================================================================
 
 double get_frame_delta()
 {
@@ -274,8 +290,7 @@ Mesh mesh_from_obj(ObjObject const *obj)
   for (size_t i = 0; i < obj->vertex_count; i++)
   {
     obj_Vertex const *pos = &obj->verts[i];
-
-    mesh.verts[i].pos = new_vec4(pos->x, pos->y, pos->z, pos->w);
+    mesh.verts[i].pos     = new_vec4(pos->x, pos->y, pos->z, pos->w);
   }
   size_t index = 0;
   for (size_t i = 0; i < obj->face_count; i++)
@@ -296,6 +311,13 @@ Mesh mesh_from_obj(ObjObject const *obj)
         mesh.verts[vertex_index].varying[NORMAL_Y] = n->y;
         mesh.verts[vertex_index].varying[NORMAL_Z] = n->z;
       }
+      if (e->vt_i > 0)
+      {
+        obj_TexCoord const *t = &obj->uvs[e->vt_i - 1];
+
+        mesh.verts[vertex_index].varying[UV_U] = t->u;
+        mesh.verts[vertex_index].varying[UV_V] = t->v;
+      }
     }
   }
   return mesh;
@@ -314,6 +336,16 @@ Model load_model(char const *filename)
   return model;
 }
 
+void load_texture(Texture *tex, char const *filename)
+{
+  tex->data = stbi_load(filename, &tex->width, &tex->height, &tex->channels, 0);
+  if (tex->channels < 4)
+  {
+    fprintf(stderr, "Incompatible PNG file %s\n", filename);
+    exit(1);
+  }
+}
+
 // ============================================================================
 // DRAWING
 // ============================================================================
@@ -329,14 +361,41 @@ void draw_pixel(uint32_t const x,
   fb->color_buffer[fb->draw_idx][idx] = color;
 }
 
-uint32_t pack_color(float const *v)
+uint32_t pack_color(float in_r, float in_g, float in_b, float in_a)
 {
-  uint32_t r = (uint32_t)(v[COLOR_R] * 255.0f);
-  uint32_t g = (uint32_t)(v[COLOR_G] * 255.0f);
-  uint32_t b = (uint32_t)(v[COLOR_B] * 255.0f);
-  uint32_t a = (uint32_t)(v[COLOR_A] * 255.0f);
-
+  uint32_t r = (uint32_t)(in_r);
+  uint32_t g = (uint32_t)(in_g);
+  uint32_t b = (uint32_t)(in_b);
+  uint32_t a = (uint32_t)(in_a);
   return (a << 24) | (r << 16) | (g << 8) | b;
+}
+
+uint32_t sample_texture(Texture *tex, SampleMode mode, float u, float v)
+{
+  int32_t x = (int32_t)(u * tex->width);
+  int32_t y = (int32_t)(v * tex->height);
+
+  if (mode == CLAMP)
+  {
+    x = x < 0 ? 0 : x > tex->width ? tex->width - 1 : x;
+    y = y < 0 ? 0 : y > tex->height ? tex->height - 1 : y;
+  }
+  if (mode == WRAP)
+  {
+    float wu = u - floorf(u);
+    float wv = v - floorf(v);
+
+    x = (int)(wu * tex->width);
+    y = (int)(wv * tex->height);
+
+    x = (x >= tex->width) ? tex->width - 1 : x;
+    y = (y >= tex->height) ? tex->height - 1 : y;
+  }
+  size_t idx = (y * tex->width + x) * tex->channels;
+  return pack_color(tex->data[idx],
+                    tex->data[idx + 1],
+                    tex->data[idx + 2],
+                    tex->data[idx + 3]);
 }
 
 void draw_triangle(Vertex      *verts,
@@ -416,10 +475,16 @@ void draw_triangle(Vertex      *verts,
           varying[i] = bw0 * v[0].varying[i] + bw1 * v[1].varying[i] +
                        bw2 * v[2].varying[i];
         }
-        Color c = pack_color(varying);
+        Color normal_color = pack_color(varying[COLOR_R] * 255.0,
+                                        varying[COLOR_G] * 255.0,
+                                        varying[COLOR_B] * 255.0,
+                                        varying[COLOR_A] * 255.0);
+
+        Color texture_color =
+          sample_texture(&tex1, WRAP, varying[UV_U], varying[UV_V]);
 
         fb->depth_buffer[fb->draw_idx][idx] = z;
-        draw_pixel(x, y, c, fb);
+        draw_pixel(x, y, texture_color, fb);
       }
     }
 }
@@ -632,8 +697,10 @@ int main(int argc, char *argv[])
          render_img->green_mask,
          render_img->blue_mask);
 
-  Model teapot_model = load_model("teapot.obj");
+  Model teapot_model = load_model("models/teapot.obj");
   teapot_model.mtw   = identity();
+  load_texture(&tex0, "textures/placeholder128x128.png");
+  load_texture(&tex1, "textures/placeholder16x16.png");
   // TEMP: normals as colors
   for (size_t i = 0; i < teapot_model.mesh.vertex_count; i++)
   {
@@ -658,7 +725,7 @@ int main(int argc, char *argv[])
   {
     // WARN: only call once per frame
     double const dt = get_frame_delta();
-    // printf("frame time: %f\n", df);
+    printf("frame time: %.4f seconds => FPS: %d\n", dt, (int)(1.0 / dt));
 
     poll_input(cfg, &quit, &input_state);
 
