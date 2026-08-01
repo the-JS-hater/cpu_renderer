@@ -50,7 +50,7 @@ Vec4  vec4_norm(Vec4);
 float vec4_length(Vec4);
 float vec4_dist(Vec4, Vec4);
 float dot4(Vec4, Vec4);
-
+Vec4  vec4_lerp(Vec4, Vec4, float);
 
 typedef struct {
   float m[9];

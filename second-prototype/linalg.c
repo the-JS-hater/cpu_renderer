@@ -91,6 +91,15 @@ float dot4(Vec4 v, Vec4 u)
   return (v.x * u.x + v.y * u.y + v.z * u.z + v.w * u.w);
 }
 
+Vec4 vec4_lerp(Vec4 v, Vec4 u, float t)
+{
+  Vec4 out;
+  out.x = v.x + t * (u.x - v.x);
+  out.y = v.y + t * (u.y - v.y);
+  out.z = v.z + t * (u.z - v.z);
+  out.w = v.w + t * (u.w - v.w);
+  return out;
+}
 
 Mat3 mat3_add(Mat3 m1, Mat3 m2)
 {

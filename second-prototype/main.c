@@ -395,6 +395,67 @@ uint32_t sample_texture(Texture *tex, SampleMode mode, float u, float v)
                     tex->data[idx + 3]);
 }
 
+float near_distance(Vertex *v) { return v->pos.z + v->pos.w; }
+
+Vertex lerp_vertex(Vertex *a, Vertex *b, float t)
+{
+  Vertex out;
+  out.pos = vec4_lerp(a->pos, b->pos, t);
+  for (int i = 0; i < MAX_VARYING_ATTRS; ++i)
+    out.varying[i] = a->varying[i] + t * (b->varying[i] - a->varying[i]);
+  return out;
+}
+
+int triangulate_fan(Vertex *poly, int poly_count, Vertex tris_out[][3])
+{
+  if (poly_count < 3) return 0;
+
+  int tri_count = 0;
+  for (int i = 1; i < poly_count - 1; ++i)
+  {
+    tris_out[tri_count][0] = poly[0];
+    tris_out[tri_count][1] = poly[i];
+    tris_out[tri_count][2] = poly[i + 1];
+    tri_count++;
+  }
+  return tri_count;
+}
+
+int clip_triangle_near(Vertex in[3], Vertex out[4])
+{
+  int count = 0;
+  for (int i = 0; i < 3; ++i)
+  {
+    Vertex *curr    = &in[i];
+    Vertex *prev    = &in[(i + 2) % 3];
+    float   d_curr  = near_distance(curr);
+    float   d_prev  = near_distance(prev);
+    bool    curr_in = d_curr >= 0.0f;
+    bool    prev_in = d_prev >= 0.0f;
+
+    if (curr_in != prev_in)
+    {
+      float t      = d_prev / (d_prev - d_curr);
+      out[count++] = lerp_vertex(prev, curr, t);
+    }
+    if (curr_in) out[count++] = *curr;
+  }
+  return count;
+}
+
+void vertex_to_screen(Vertex *verts, FrameBuffer *fb)
+{
+  for (int i = 0; i < 3; i++)
+  {
+    verts[i].pos.x /= verts[i].pos.w;
+    verts[i].pos.y /= verts[i].pos.w;
+    verts[i].pos.z /= verts[i].pos.w;
+
+    verts[i].pos.x = (verts[i].pos.x + 1.0f) * 0.5f * fb->width;
+    verts[i].pos.y = (1.0f - verts[i].pos.y) * 0.5f * fb->height;
+  }
+}
+
 void draw_triangle(Vertex      *verts,
                    size_t       idx1,
                    size_t       idx2,
@@ -403,87 +464,78 @@ void draw_triangle(Vertex      *verts,
                    bool         backface_culling)
 {
   // NOTE: Assumes vertices are in clip space
-
   Vertex v[3] = {
     verts[idx1],
     verts[idx2],
     verts[idx3],
   };
+  static int const MAX_CLIP_VERTS = 4;
 
-  // reject triangles behind near plane
-  // TODO: properly clip triangles
-  if (v[0].pos.z < -v[0].pos.w || v[1].pos.z < -v[1].pos.w ||
-      v[2].pos.z < -v[2].pos.w)
+  Vertex clipped[MAX_CLIP_VERTS];
+  int    clipped_count = clip_triangle_near(v, clipped);
+
+  // fully behind near plane
+  if (clipped_count < 3) return;
+  Vertex tris[MAX_CLIP_VERTS - 2][3];
+  int    tri_count = triangulate_fan(clipped, clipped_count, tris);
+
+  for (int t = 0; t < tri_count; ++t)
   {
-    return;
-  }
+    Vertex tv[3] = {tris[t][0], tris[t][1], tris[t][2]};
 
-  // Clip space -> NDC -> screen space
-  for (int i = 0; i < 3; i++)
-  {
-    v[i].pos.x /= v[i].pos.w;
-    v[i].pos.y /= v[i].pos.w;
-    v[i].pos.z /= v[i].pos.w;
+    // Clip space -> NDC -> screen space
+    vertex_to_screen(tv, fb);
+    Vec4 v1 = tv[0].pos;
+    Vec4 v2 = tv[1].pos;
+    Vec4 v3 = tv[2].pos;
 
-    v[i].pos.x = (v[i].pos.x + 1.0f) * 0.5f * fb->width;
-    v[i].pos.y = (1.0f - v[i].pos.y) * 0.5f * fb->height;
-  }
+    int32_t xmin = fmin(v1.x, fmin(v2.x, v3.x));
+    int32_t ymin = fmin(v1.y, fmin(v2.y, v3.y));
+    int32_t xmax = fmax(v1.x, fmax(v2.x, v3.x));
+    int32_t ymax = fmax(v1.y, fmax(v2.y, v3.y));
+    xmin         = xmin < 0 ? 0 : xmin;
+    ymin         = ymin < 0 ? 0 : ymin;
+    xmax         = xmax >= fb->width ? fb->width - 1 : xmax;
+    ymax         = ymax >= fb->height ? fb->height - 1 : ymax;
 
-  Vec4 v1 = v[0].pos;
-  Vec4 v2 = v[1].pos;
-  Vec4 v3 = v[2].pos;
+    Vec4 const v12 = vec4_sub(v2, v1);
+    Vec4 const v13 = vec4_sub(v3, v1);
 
-  int32_t xmin = fmin(v1.x, fmin(v2.x, v3.x));
-  int32_t ymin = fmin(v1.y, fmin(v2.y, v3.y));
-  int32_t xmax = fmax(v1.x, fmax(v2.x, v3.x));
-  int32_t ymax = fmax(v1.y, fmax(v2.y, v3.y));
+    float area = v12.x * v13.y - v12.y * v13.x;
+    if (backface_culling && area >= 0) continue;
 
-  xmin = xmin < 0 ? 0 : xmin;
-  ymin = ymin < 0 ? 0 : ymin;
-  xmax = xmax >= fb->width ? fb->width - 1 : xmax;
-  ymax = ymax >= fb->height ? fb->height - 1 : ymax;
-
-  Vec4 const v12  = vec4_sub(v2, v1);
-  Vec4 const v13  = vec4_sub(v3, v1);
-  float      area = v12.x * v13.y - v12.y * v13.x;
-  if (backface_culling && area >= 0) return;
-
-  for (size_t x = xmin; x <= xmax; ++x)
-    for (size_t y = ymin; y <= ymax; ++y)
-    {
-      Vec3  p  = new_vec3((float)x + 0.5f, (float)y + 0.5f, 0.0f);
-      float w0 = (v3.x - v2.x) * (p.y - v2.y) - (v3.y - v2.y) * (p.x - v2.x);
-      float w1 = (v1.x - v3.x) * (p.y - v3.y) - (v1.y - v3.y) * (p.x - v3.x);
-      float w2 = (v2.x - v1.x) * (p.y - v1.y) - (v2.y - v1.y) * (p.x - v1.x);
-
-      if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0))
+    for (size_t x = xmin; x <= xmax; ++x)
+      for (size_t y = ymin; y <= ymax; ++y)
       {
-        float bw0 = w0 / area;
-        float bw1 = w1 / area;
-        float bw2 = w2 / area;
-        float z   = bw0 * v1.z + bw1 * v2.z + bw2 * v3.z;
-
-        size_t idx = y * fb->width + x;
-        if (z >= fb->depth_buffer[fb->draw_idx][idx]) continue;
-
-        float varying[MAX_VARYING_ATTRS];
-        for (int i = 0; i < MAX_VARYING_ATTRS; ++i)
+        Vec3  p  = new_vec3((float)x + 0.5f, (float)y + 0.5f, 0.0f);
+        float w0 = (v3.x - v2.x) * (p.y - v2.y) - (v3.y - v2.y) * (p.x - v2.x);
+        float w1 = (v1.x - v3.x) * (p.y - v3.y) - (v1.y - v3.y) * (p.x - v3.x);
+        float w2 = (v2.x - v1.x) * (p.y - v1.y) - (v2.y - v1.y) * (p.x - v1.x);
+        if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0))
         {
-          varying[i] = bw0 * v[0].varying[i] + bw1 * v[1].varying[i] +
-                       bw2 * v[2].varying[i];
+          float  bw0 = w0 / area;
+          float  bw1 = w1 / area;
+          float  bw2 = w2 / area;
+          float  z   = bw0 * v1.z + bw1 * v2.z + bw2 * v3.z;
+          size_t idx = y * fb->width + x;
+          if (z >= fb->depth_buffer[fb->draw_idx][idx]) continue;
+          float varying[MAX_VARYING_ATTRS];
+          for (int i = 0; i < MAX_VARYING_ATTRS; ++i)
+          {
+            varying[i] = bw0 * tv[0].varying[i] + bw1 * tv[1].varying[i] +
+                         bw2 * tv[2].varying[i];
+          }
+          Color normal_color = pack_color(varying[COLOR_R] * 255.0,
+                                          varying[COLOR_G] * 255.0,
+                                          varying[COLOR_B] * 255.0,
+                                          varying[COLOR_A] * 255.0);
+          Color texture_color =
+            sample_texture(&tex1, WRAP, varying[UV_U], varying[UV_V]);
+          fb->depth_buffer[fb->draw_idx][idx] = z;
+          draw_pixel(x, y, normal_color, fb);
         }
-        Color normal_color = pack_color(varying[COLOR_R] * 255.0,
-                                        varying[COLOR_G] * 255.0,
-                                        varying[COLOR_B] * 255.0,
-                                        varying[COLOR_A] * 255.0);
-
-        Color texture_color =
-          sample_texture(&tex1, WRAP, varying[UV_U], varying[UV_V]);
-
-        fb->depth_buffer[fb->draw_idx][idx] = z;
-        draw_pixel(x, y, normal_color, fb);
       }
-    }
+  }
 }
 
 void draw_model(Model const *model,
@@ -509,7 +561,6 @@ void draw_model(Model const *model,
     draw_triangle(transformed, idx1, idx2, idx3, fb, backface_culling);
   }
 }
-
 
 Mat4 look_at(Vec3 pos, Vec3 target, Vec3 up)
 {
@@ -601,7 +652,6 @@ void poll_input(AppConfig *cfg, bool *quit, InputState *input)
         case KEY_LEFT_CTRL: input->ctrl = true; break;
       }
     }
-
     if (event.type == KeyRelease)
     {
       switch (event.xkey.keycode)
@@ -748,6 +798,7 @@ int main(int argc, char *argv[])
 
     // Draw model
     draw_model(&teapot_model, &view, &projection, fb, true);
+
     update_window(cfg, render_img, disp_img, db, fb);
   };
   close_window(cfg);
