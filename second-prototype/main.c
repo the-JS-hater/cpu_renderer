@@ -532,6 +532,7 @@ void draw_triangle(Vertex      *verts,
                          bw2 * tv[2].varying[i];
           }
 
+          // TEMPORARY: remove later
           Color normal_color = pack_color(varying[COLOR_R] * 255.0,
                                           varying[COLOR_G] * 255.0,
                                           varying[COLOR_B] * 255.0,
@@ -539,6 +540,10 @@ void draw_triangle(Vertex      *verts,
 
           Color texture_color =
             sample_texture(&tex1, WRAP, varying[UV_U], varying[UV_V]);
+          float tex_r = ((texture_color >> 16) & 0xFF) / 255.0f;
+          float tex_g = ((texture_color >> 8) & 0xFF) / 255.0f;
+          float tex_b = (texture_color & 0xFF) / 255.0f;
+          float tex_a = ((texture_color >> 24) & 0xFF) / 255.0f;
 
           // PHONG LIGHTING
           Vec3  light_pos           = new_vec3(0, 5, 5);
@@ -563,14 +568,19 @@ void draw_triangle(Vertex      *verts,
           total_light.y = fminf(1.0f, total_light.y);
           total_light.z = fminf(1.0f, total_light.z);
 
+          // TEMPORARY: remove later
           Color phong_color = pack_color(total_light.x * 255.0f,
                                          total_light.y * 255.0f,
                                          total_light.z * 255.0f,
                                          255.0f);
 
+          Color final_color = pack_color(tex_r * total_light.x * 255.0f,
+                                         tex_g * total_light.y * 255.0f,
+                                         tex_b * total_light.z * 255.0f,
+                                         tex_a * 255.0f);
 
           fb->depth_buffer[fb->draw_idx][idx] = z;
-          draw_pixel(x, y, phong_color, fb);
+          draw_pixel(x, y, final_color, fb);
         }
       }
   }
@@ -724,32 +734,39 @@ void poll_input(AppConfig *cfg, bool *quit, InputState *input)
 
 void update_camera(Camera *camera, InputState const *input, double dt)
 {
-  float const speed             = 2.5 * dt;
-  float const mouse_sensitivity = 0.005f * dt;
+  float const       speed             = 5.0f * (float)dt;
+  float const       mouse_sensitivity = 0.00025f;
+  static Vec3 const world_up          = {0.0f, 1.0f, 0.0f};
+  float const       pitch_limit       = 89.0f * (M_PI / 180.0f);
 
-  float const yaw      = input->mouse_dx * mouse_sensitivity;
-  float const pitch    = input->mouse_dy * mouse_sensitivity;
-  Vec3 const  world_up = {0.0f, 1.0f, 0.0f};
-  Vec3 const  right    = vec3_norm(cross(camera->camera_front, world_up));
+  Vec3  f     = camera->camera_front;
+  float yaw   = atan2f(f.z, f.x);
+  float pitch = asinf(f.y);
 
-  camera->camera_front =
-    vec3(transform_vec3(rotate_x(pitch), camera->camera_front));
-  camera->camera_front =
-    vec3(transform_vec3(rotate_y(yaw), camera->camera_front));
-  camera->camera_front = vec3_norm(camera->camera_front);
+  yaw += input->mouse_dx * mouse_sensitivity;
+  pitch -= input->mouse_dy * mouse_sensitivity;
 
-  if (input->w)
+  if (pitch > pitch_limit) pitch = pitch_limit;
+  if (pitch < -pitch_limit) pitch = -pitch_limit;
+
+  camera->camera_front = vec3_norm((Vec3){
+    cosf(pitch) * cosf(yaw),
+    sinf(pitch),
+    cosf(pitch) * sinf(yaw),
+  });
+
+  Vec3 const right  = vec3_norm(cross(camera->camera_front, world_up));
+  camera->camera_up = vec3_norm(cross(right, camera->camera_front));
+
+  Vec3 move = {0};
+  if (input->w) move = vec3_add(move, camera->camera_front);
+  if (input->s) move = vec3_sub(move, camera->camera_front);
+  if (input->d) move = vec3_add(move, right);
+  if (input->a) move = vec3_sub(move, right);
+
+  if (vec3_length(move) > 0.0001f)
     camera->camera_pos =
-      vec3_add(camera->camera_pos, vec3_mult_val(camera->camera_front, speed));
-  if (input->s)
-    camera->camera_pos =
-      vec3_sub(camera->camera_pos, vec3_mult_val(camera->camera_front, speed));
-  if (input->d)
-    camera->camera_pos =
-      vec3_add(camera->camera_pos, vec3_mult_val(right, speed));
-  if (input->a)
-    camera->camera_pos =
-      vec3_sub(camera->camera_pos, vec3_mult_val(right, speed));
+      vec3_add(camera->camera_pos, vec3_mult_val(vec3_norm(move), speed));
 
   if (input->shift) camera->camera_pos.y += speed;
   if (input->ctrl) camera->camera_pos.y -= speed;
@@ -816,9 +833,9 @@ int main(int argc, char *argv[])
   }
 
   Camera camera = {
-    (Vec3){0.0f, 1.0f, 0.0f },
-    (Vec3){0.0f, 0.0f, -1.0f},
-    (Vec3){0.0f, 0.0f, 10.0f},
+    (Vec3){0.0f, 1.0f, 0.0f }, // up
+    (Vec3){0.0f, 0.0f, -1.0f}, // front
+    (Vec3){0.0f, 2.5f, 10.0f}, // pos
   };
   clock_gettime(CLOCK_MONOTONIC, &last_frame);
 
