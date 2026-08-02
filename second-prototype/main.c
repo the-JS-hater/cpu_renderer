@@ -495,14 +495,24 @@ void draw_triangle(Vertex      *verts,
     Vec4 v2 = tv[1].pos;
     Vec4 v3 = tv[2].pos;
 
-    int32_t xmin = fmin(v1.x, fmin(v2.x, v3.x));
-    int32_t ymin = fmin(v1.y, fmin(v2.y, v3.y));
-    int32_t xmax = fmax(v1.x, fmax(v2.x, v3.x));
-    int32_t ymax = fmax(v1.y, fmax(v2.y, v3.y));
-    xmin         = xmin < 0 ? 0 : xmin;
-    ymin         = ymin < 0 ? 0 : ymin;
-    xmax         = xmax >= fb->width ? fb->width - 1 : xmax;
-    ymax         = ymax >= fb->height ? fb->height - 1 : ymax;
+    float fxmin = fmin(v1.x, fmin(v2.x, v3.x));
+    float fymin = fmin(v1.y, fmin(v2.y, v3.y));
+    float fxmax = fmax(v1.x, fmax(v2.x, v3.x));
+    float fymax = fmax(v1.y, fmax(v2.y, v3.y));
+
+    fxmin         = fmaxf(fxmin, 0.0f);
+    fymin         = fmaxf(fymin, 0.0f);
+    fxmax         = fminf(fxmax, (float)fb->width - 1);
+    fymax         = fminf(fymax, (float)fb->height - 1);
+    uint32_t xmin = (uint32_t)fxmin;
+    uint32_t ymin = (uint32_t)fymin;
+    uint32_t xmax = (uint32_t)fxmax;
+    uint32_t ymax = (uint32_t)fymax;
+
+    xmin = xmin < 0 ? 0 : xmin;
+    ymin = ymin < 0 ? 0 : ymin;
+    xmax = xmax >= fb->width ? fb->width - 1 : xmax;
+    ymax = ymax >= fb->height ? fb->height - 1 : ymax;
 
     Vec4 const v12 = vec4_sub(v2, v1);
     Vec4 const v13 = vec4_sub(v3, v1);
@@ -552,16 +562,16 @@ void draw_triangle(Vertex      *verts,
           float reflectivity        = 0.5;
           Vec3  normal              = vec3_norm(
             new_vec3(varying[NORMAL_X], varying[NORMAL_Y], varying[NORMAL_Z]));
-          Vec3 surface          = new_vec3(varying[SURFACE_X],
+          Vec3 surface = new_vec3(varying[SURFACE_X],
                                   varying[SURFACE_Y],
                                   varying[SURFACE_Z]);
-          Vec3 surface_to_light = vec3_norm(vec3_sub(light_pos, surface));
 
-          float n_dot_l = fmaxf(0.0f, dot3(normal, surface_to_light));
+          Vec3  surface_to_light = vec3_norm(vec3_sub(light_pos, surface));
+          float angle            = fmaxf(0.0f, dot3(normal, surface_to_light));
 
           Vec3 ambient_light = vec3_mult_val(ambient_light_color, reflectivity);
           Vec3 diffuse_light =
-            vec3_mult_val(vec3_mult_val(light_color, reflectivity), n_dot_l);
+            vec3_mult_val(vec3_mult_val(light_color, reflectivity), angle);
           Vec3 total_light = vec3_add(ambient_light, diffuse_light);
 
           total_light.x = fminf(1.0f, total_light.x);
@@ -593,7 +603,7 @@ void draw_model(Model const *model,
                 bool         backface_culling)
 {
   Vertex transformed[model->mesh.vertex_count];
-  Mat3   normal_mat = mat4_to_mat3(model->mtw);
+  Mat3   normal_mat = mat3_transpose(mat3_inverse(mat4_to_mat3(model->mtw)));
 
   for (size_t i = 0; i < model->mesh.vertex_count; ++i)
   {
