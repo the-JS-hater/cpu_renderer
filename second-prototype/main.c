@@ -541,7 +541,7 @@ void draw_triangle(Vertex      *verts,
             sample_texture(&tex1, WRAP, varying[UV_U], varying[UV_V]);
 
           // PHONG LIGHTING
-          Vec3  light_pos           = new_vec3(0, 10, 0);
+          Vec3  light_pos           = new_vec3(0, 5, 5);
           Vec3  light_color         = new_vec3(1.0, 0.1, 0.1);
           Vec3  ambient_light_color = new_vec3(0.5, 0.5, 0.5);
           float reflectivity        = 0.5;
@@ -583,13 +583,28 @@ void draw_model(Model const *model,
                 bool         backface_culling)
 {
   Vertex transformed[model->mesh.vertex_count];
+  Mat3   normal_mat = mat4_to_mat3(model->mtw);
 
   for (size_t i = 0; i < model->mesh.vertex_count; ++i)
   {
-    transformed[i]     = model->mesh.verts[i];
-    transformed[i].pos = transform(model->mtw, transformed[i].pos);
-    transformed[i].pos = transform(*view, transformed[i].pos);
-    transformed[i].pos = transform(*projection, transformed[i].pos);
+    transformed[i] = model->mesh.verts[i];
+
+    Vec4 world_pos = transform(model->mtw, transformed[i].pos);
+
+    Vec3 local_normal = new_vec3(transformed[i].varying[NORMAL_X],
+                                 transformed[i].varying[NORMAL_Y],
+                                 transformed[i].varying[NORMAL_Z]);
+
+    Vec3 world_normal = transform_mat3(normal_mat, local_normal);
+
+    transformed[i].varying[NORMAL_X]  = world_normal.x;
+    transformed[i].varying[NORMAL_Y]  = world_normal.y;
+    transformed[i].varying[NORMAL_Z]  = world_normal.z;
+    transformed[i].varying[SURFACE_X] = world_pos.x;
+    transformed[i].varying[SURFACE_Y] = world_pos.y;
+    transformed[i].varying[SURFACE_Z] = world_pos.z;
+
+    transformed[i].pos = transform(*projection, transform(*view, world_pos));
   }
   for (size_t offset = 0; offset < model->mesh.index_count; offset += 3)
   {

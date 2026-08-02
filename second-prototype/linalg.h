@@ -61,6 +61,7 @@ typedef struct {
   float m[16];
 } Mat4;
 
+Mat3 mat4_to_mat3(Mat4);
 Mat3 mat3_add(Mat3, Mat3);
 Mat3 mat3_sub(Mat3, Mat3);
 Mat3 mat3_scale(Mat3, float);
@@ -82,6 +83,7 @@ Mat4 rotate_y(float);
 Mat4 rotate_z(float);
 Mat4 translate(float, float, float);
 Vec4 transform(Mat4, Vec4);
+Vec3 transform_mat3(Mat3, Vec3);
 Vec4 transform_vec3(Mat4, Vec3);
 Mat4 ortho(float, float, float, float, float, float);
 Mat4 perspective(float, float, float, float);

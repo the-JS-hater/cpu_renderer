@@ -106,6 +106,21 @@ Vec4 vec4_lerp(Vec4 v, Vec4 u, float t)
   return out;
 }
 
+Mat3 mat4_to_mat3(Mat4 m)
+{
+  return (Mat3){
+    m.m[0],
+    m.m[1],
+    m.m[2],
+    m.m[4],
+    m.m[5],
+    m.m[6],
+    m.m[8],
+    m.m[9],
+    m.m[10],
+  };
+}
+
 Mat3 mat3_add(Mat3 m1, Mat3 m2)
 {
   return (Mat3){
@@ -520,6 +535,15 @@ Vec4 transform(Mat4 m, Vec4 v)
     m.m[1] * v.x + m.m[5] * v.y + m.m[9] * v.z + m.m[13] * v.w,
     m.m[2] * v.x + m.m[6] * v.y + m.m[10] * v.z + m.m[14] * v.w,
     m.m[3] * v.x + m.m[7] * v.y + m.m[11] * v.z + m.m[15] * v.w,
+  };
+}
+
+Vec3 transform_mat3(Mat3 m, Vec3 v)
+{
+  return (Vec3){
+    m.m[0] * v.x + m.m[3] * v.y + m.m[6] * v.z,
+    m.m[1] * v.x + m.m[4] * v.y + m.m[7] * v.z,
+    m.m[2] * v.x + m.m[5] * v.y + m.m[8] * v.z,
   };
 }
 
