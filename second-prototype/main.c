@@ -378,6 +378,49 @@ void draw_pixel(uint32_t const x,
   fb->color_buffer[fb->draw_idx][idx] = color;
 }
 
+void draw_line(FrameBuffer *fb, Vec4 const s, Vec4 const e, Color color)
+{
+  int32_t x0 = (int32_t)roundf(s.x);
+  int32_t y0 = (int32_t)roundf(s.y);
+  int32_t x1 = (int32_t)roundf(e.x);
+  int32_t y1 = (int32_t)roundf(e.y);
+
+  if ((x0 < 0 && x1 < 0) || (y0 < 0 && y1 < 0) ||
+      (x0 >= (int32_t)fb->width && x1 >= (int32_t)fb->width) ||
+      (y0 >= (int32_t)fb->height && y1 >= (int32_t)fb->height))
+  {
+    return;
+  }
+  x0 = x0 < 0 ? 0 : (x0 >= (int32_t)fb->width ? fb->width - 1 : x0);
+  y0 = y0 < 0 ? 0 : (y0 >= (int32_t)fb->height ? fb->height - 1 : y0);
+  x1 = x1 < 0 ? 0 : (x1 >= (int32_t)fb->width ? fb->width - 1 : x1);
+  y1 = y1 < 0 ? 0 : (y1 >= (int32_t)fb->height ? fb->height - 1 : y1);
+
+  int32_t dx  = abs(x1 - x0);
+  int32_t sx  = x0 < x1 ? 1 : -1;
+  int32_t dy  = -abs(y1 - y0);
+  int32_t sy  = y0 < y1 ? 1 : -1;
+  int32_t err = dx + dy;
+
+  while (true)
+  {
+    draw_pixel(x0, y0, color, fb);
+    if (x0 == x1 && y0 == y1) break;
+
+    int e2 = 2 * err;
+    if (e2 >= dy)
+    {
+      err += dy;
+      x0 += sx;
+    }
+    if (e2 <= dx)
+    {
+      err += dx;
+      y0 += sy;
+    }
+  }
+}
+
 uint32_t pack_color(float in_r, float in_g, float in_b, float in_a)
 {
   uint32_t r = (uint32_t)(in_r);
@@ -530,6 +573,79 @@ Color shade_pixel(Texture        *tex,
     tex_a * 255.0f);
 }
 
+void draw_triangle_wireframe(Vertex const *verts,
+                             size_t const  idx1,
+                             size_t const  idx2,
+                             size_t const  idx3,
+                             FrameBuffer  *fb,
+                             bool          triangle,
+                             bool          bbox)
+{
+  Vertex v[3] = {
+    verts[idx1],
+    verts[idx2],
+    verts[idx3],
+  };
+
+
+  static int const MAX_CLIP_VERTS = 4;
+
+  Vertex clipped[MAX_CLIP_VERTS];
+  int    clipped_count = clip_triangle_near(v, clipped);
+
+  // fully behind near plane
+  if (clipped_count < 3) return;
+  Vertex tris[MAX_CLIP_VERTS - 2][3];
+  int    tri_count = triangulate_fan(clipped, clipped_count, tris);
+
+  for (int t = 0; t < tri_count; ++t)
+  {
+    Vertex tv[3] = {tris[t][0], tris[t][1], tris[t][2]};
+    // Clip space -> NDC -> screen space
+    vertex_to_screen(tv, fb);
+    Vec4 v1 = tv[0].pos;
+    Vec4 v2 = tv[1].pos;
+    Vec4 v3 = tv[2].pos;
+
+    float area = (v2.x - v1.x) * (v3.y - v1.y) - (v2.y - v1.y) * (v3.x - v1.x);
+    if (area >= 0) continue;
+
+    float fxmin = fmin(v1.x, fmin(v2.x, v3.x));
+    float fymin = fmin(v1.y, fmin(v2.y, v3.y));
+    float fxmax = fmax(v1.x, fmax(v2.x, v3.x));
+    float fymax = fmax(v1.y, fmax(v2.y, v3.y));
+
+    int32_t xmin = (int32_t)fxmin;
+    int32_t ymin = (int32_t)fymin;
+    int32_t xmax = (int32_t)fxmax;
+    int32_t ymax = (int32_t)fymax;
+
+    xmin = xmin < 0 ? 0 : xmin;
+    ymin = ymin < 0 ? 0 : ymin;
+    xmax = xmax > fb->width ? fb->width - 1 : xmax;
+    ymax = ymax > fb->height ? fb->height - 1 : ymax;
+
+    if (triangle)
+    {
+      draw_line(fb, v1, v2, 0xFFFF0000);
+      draw_line(fb, v1, v3, 0xFFFF0000);
+      draw_line(fb, v2, v3, 0xFFFF0000);
+    }
+    if (bbox)
+    {
+      Vec4 tl_corner = new_vec4(xmin, ymax, 0, 0);
+      Vec4 tr_corner = new_vec4(xmax, ymax, 0, 0);
+      Vec4 bl_corner = new_vec4(xmin, ymin, 0, 0);
+      Vec4 br_corner = new_vec4(xmax, ymin, 0, 0);
+
+      draw_line(fb, tl_corner, tr_corner, 0xFF0000FF);
+      draw_line(fb, tr_corner, br_corner, 0xFF0000FF);
+      draw_line(fb, br_corner, bl_corner, 0xFF0000FF);
+      draw_line(fb, bl_corner, tl_corner, 0xFF0000FF);
+    }
+  }
+}
+
 void draw_triangle(Vertex const   *verts,
                    size_t const    idx1,
                    size_t const    idx2,
@@ -538,7 +654,7 @@ void draw_triangle(Vertex const   *verts,
                    Material const *material,
                    Texture        *tex,
                    FrameBuffer    *fb,
-                   bool            backface_culling)
+                   bool const      backface_culling)
 {
   // NOTE: Assumes vertices are in clip space
 
@@ -560,7 +676,6 @@ void draw_triangle(Vertex const   *verts,
   for (int t = 0; t < tri_count; ++t)
   {
     Vertex tv[3] = {tris[t][0], tris[t][1], tris[t][2]};
-
     // Clip space -> NDC -> screen space
     vertex_to_screen(tv, fb);
     Vec4 v1 = tv[0].pos;
@@ -617,6 +732,48 @@ void draw_triangle(Vertex const   *verts,
           draw_pixel(x, y, phong_color, fb);
         }
       }
+  }
+}
+
+void draw_model_wireframe(Model const *model,
+                          Mat4 const  *view,
+                          Mat4 const  *projection,
+                          Vec3        *camera_pos,
+                          FrameBuffer *fb,
+                          bool         triangle,
+                          bool         bbox)
+{
+  Vertex transformed[model->mesh.vertex_count];
+  Mat3   normal_mat = mat3_transpose(mat3_inverse(mat4_to_mat3(model->mtw)));
+
+  for (size_t i = 0; i < model->mesh.vertex_count; ++i)
+  {
+    transformed[i] = model->mesh.verts[i];
+
+    Vec4 world_pos = transform(model->mtw, transformed[i].pos);
+
+    Vec3 local_normal = new_vec3(transformed[i].varying[NORMAL_X],
+                                 transformed[i].varying[NORMAL_Y],
+                                 transformed[i].varying[NORMAL_Z]);
+
+    Vec3 world_normal = transform_mat3(normal_mat, local_normal);
+
+    transformed[i].varying[NORMAL_X]  = world_normal.x;
+    transformed[i].varying[NORMAL_Y]  = world_normal.y;
+    transformed[i].varying[NORMAL_Z]  = world_normal.z;
+    transformed[i].varying[SURFACE_X] = world_pos.x;
+    transformed[i].varying[SURFACE_Y] = world_pos.y;
+    transformed[i].varying[SURFACE_Z] = world_pos.z;
+
+    transformed[i].pos = transform(*projection, transform(*view, world_pos));
+  }
+  for (size_t offset = 0; offset < model->mesh.index_count; offset += 3)
+  {
+    size_t idx1 = model->mesh.indices[offset];
+    size_t idx2 = model->mesh.indices[offset + 1];
+    size_t idx3 = model->mesh.indices[offset + 2];
+
+    draw_triangle_wireframe(transformed, idx1, idx2, idx3, fb, triangle, bbox);
   }
 }
 
@@ -900,6 +1057,9 @@ int main(int argc, char *argv[])
   teapot_model_matte.material = matte_material;
   teapot_model_shiny.material = metallic_material;
 
+#define NR_MODELS 3
+  Model scene[3] = {teapot_model, teapot_model_matte, teapot_model_shiny};
+
   for (size_t i = 0; i < teapot_model.mesh.vertex_count; i++)
   {
     Vertex *v = &teapot_model.mesh.verts[i];
@@ -921,7 +1081,7 @@ int main(int argc, char *argv[])
   {
     // WARN: only call once per frame
     double const dt = get_frame_delta();
-    printf("frame time: %.4f seconds => FPS: %d\n", dt, (int)(1.0 / dt));
+    // printf("frame time: %.4f seconds => FPS: %d\n", dt, (int)(1.0 / dt));
 
     poll_input(cfg, &quit, &input_state);
 
@@ -930,9 +1090,11 @@ int main(int argc, char *argv[])
     clear_background(fb, 0xFFFFFFFF);
 
     // model-to-world
-    static double r = 0.0f;
-    r += dt;
-    teapot_model.mtw = rotate_y(r);
+    static float angle = 0.0f;
+    angle += dt;
+    // scene[0].mtw = rotate_y(angle);
+    // scene[1].mtw = mat4_mult(translate(-7.5f, 0.0f, 0.0f), rotate_y(angle));
+    // scene[2].mtw = mat4_mult(translate(7.5f, 0.0f, 0.0f), rotate_y(angle));
 
     // world-to-view
     Mat4 view = look_at(camera.camera_pos,
@@ -944,21 +1106,20 @@ int main(int argc, char *argv[])
     float aspect     = ((float)cfg->win_w / (float)cfg->win_h);
     Mat4  projection = perspective(fov * (M_PI / 180.0f), aspect, near, far);
 
-    // Draw model
-    draw_model(&teapot_model, &view, &projection, &camera.camera_pos, fb, true);
-    draw_model(&teapot_model_matte,
-               &view,
-               &projection,
-               &camera.camera_pos,
-               fb,
-               true);
-    draw_model(&teapot_model_shiny,
-               &view,
-               &projection,
-               &camera.camera_pos,
-               fb,
-               true);
-
+    // Draw models
+    for (unsigned i = 0; i < NR_MODELS; ++i)
+    {
+      // draw_model(&scene[i], &view, &projection, &camera.camera_pos, fb,
+      // true);
+      bool triangle = false, bbox = true;
+      draw_model_wireframe(&scene[i],
+                           &view,
+                           &projection,
+                           &camera.camera_pos,
+                           fb,
+                           triangle,
+                           bbox);
+    }
     update_window(cfg, render_img, disp_img, db, fb);
   };
   close_window(cfg);
