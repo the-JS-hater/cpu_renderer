@@ -466,6 +466,7 @@ void draw_triangle(Vertex      *verts,
                    size_t       idx1,
                    size_t       idx2,
                    size_t       idx3,
+                   Vec3        *camera_pos,
                    FrameBuffer *fb,
                    bool         backface_culling)
 {
@@ -559,38 +560,45 @@ void draw_triangle(Vertex      *verts,
           Vec3  light_pos           = new_vec3(0, 5, 5);
           Vec3  light_color         = new_vec3(1.0, 0.1, 0.1);
           Vec3  ambient_light_color = new_vec3(0.5, 0.5, 0.5);
-          float reflectivity        = 0.5;
+          float reflectivity        = 0.6;
+          float shininess           = 64.0f;
+          float specular_strength   = 0.75f;
           Vec3  normal              = vec3_norm(
             new_vec3(varying[NORMAL_X], varying[NORMAL_Y], varying[NORMAL_Z]));
-          Vec3 surface = new_vec3(varying[SURFACE_X],
+          Vec3  surface          = new_vec3(varying[SURFACE_X],
                                   varying[SURFACE_Y],
                                   varying[SURFACE_Z]);
-
+          Vec3  view_dir         = vec3_norm(vec3_sub(*camera_pos, surface));
           Vec3  surface_to_light = vec3_norm(vec3_sub(light_pos, surface));
           float angle            = fmaxf(0.0f, dot3(normal, surface_to_light));
+          Vec3  reflect_dir      = vec3_norm(
+            vec3_sub(vec3_mult_val(normal, 2.0f * angle), surface_to_light));
+          float spec_angle  = fmaxf(0.0f, dot3(normal, reflect_dir));
+          float spec_factor = powf(spec_angle, shininess);
 
           Vec3 ambient_light = vec3_mult_val(ambient_light_color, reflectivity);
           Vec3 diffuse_light =
             vec3_mult_val(vec3_mult_val(light_color, reflectivity), angle);
+          Vec3 specular_light =
+            vec3_mult_val(light_color, specular_strength * spec_factor);
           Vec3 total_light = vec3_add(ambient_light, diffuse_light);
+
+          specular_light.x = fminf(1.0f, specular_light.x);
+          specular_light.y = fminf(1.0f, specular_light.y);
+          specular_light.z = fminf(1.0f, specular_light.z);
 
           total_light.x = fminf(1.0f, total_light.x);
           total_light.y = fminf(1.0f, total_light.y);
           total_light.z = fminf(1.0f, total_light.z);
 
-          // TEMPORARY: remove later
-          Color phong_color = pack_color(total_light.x * 255.0f,
-                                         total_light.y * 255.0f,
-                                         total_light.z * 255.0f,
-                                         255.0f);
-
-          Color final_color = pack_color(tex_r * total_light.x * 255.0f,
-                                         tex_g * total_light.y * 255.0f,
-                                         tex_b * total_light.z * 255.0f,
-                                         tex_a * 255.0f);
+          Color phong_color = pack_color(
+            fminf(1.0f, tex_r * total_light.x + specular_light.x) * 255.0f,
+            fminf(1.0f, tex_g * total_light.y + specular_light.y) * 255.0f,
+            fminf(1.0f, tex_b * total_light.z + specular_light.z) * 255.0f,
+            tex_a * 255.0f);
 
           fb->depth_buffer[fb->draw_idx][idx] = z;
-          draw_pixel(x, y, final_color, fb);
+          draw_pixel(x, y, phong_color, fb);
         }
       }
   }
@@ -599,6 +607,7 @@ void draw_triangle(Vertex      *verts,
 void draw_model(Model const *model,
                 Mat4 const  *view,
                 Mat4 const  *projection,
+                Vec3        *camera_pos,
                 FrameBuffer *fb,
                 bool         backface_culling)
 {
@@ -631,7 +640,13 @@ void draw_model(Model const *model,
     size_t idx1 = model->mesh.indices[offset];
     size_t idx2 = model->mesh.indices[offset + 1];
     size_t idx3 = model->mesh.indices[offset + 2];
-    draw_triangle(transformed, idx1, idx2, idx3, fb, backface_culling);
+    draw_triangle(transformed,
+                  idx1,
+                  idx2,
+                  idx3,
+                  camera_pos,
+                  fb,
+                  backface_culling);
   }
 }
 
@@ -879,7 +894,7 @@ int main(int argc, char *argv[])
     Mat4  projection = perspective(fov * (M_PI / 180.0f), aspect, near, far);
 
     // Draw model
-    draw_model(&teapot_model, &view, &projection, fb, true);
+    draw_model(&teapot_model, &view, &projection, &camera.camera_pos, fb, true);
 
     update_window(cfg, render_img, disp_img, db, fb);
   };
