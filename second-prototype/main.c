@@ -489,12 +489,15 @@ int clip_triangle_near(Vertex in[3], Vertex out[4])
   int count = 0;
   for (int i = 0; i < 3; ++i)
   {
-    Vertex *curr    = &in[i];
-    Vertex *prev    = &in[(i + 2) % 3];
-    float   d_curr  = near_distance(curr);
-    float   d_prev  = near_distance(prev);
-    bool    curr_in = d_curr >= 0.0f;
-    bool    prev_in = d_prev >= 0.0f;
+    Vertex *curr   = &in[i];
+    Vertex *prev   = &in[(i + 2) % 3];
+    float   d_curr = near_distance(curr);
+    float   d_prev = near_distance(prev);
+
+    static float const NEAR_EPS = 1e-4f;
+
+    bool curr_in = d_curr >= NEAR_EPS;
+    bool prev_in = d_prev >= NEAR_EPS;
 
     if (curr_in != prev_in)
     {
@@ -587,7 +590,6 @@ void draw_triangle_wireframe(Vertex const *verts,
     verts[idx3],
   };
 
-
   static int const MAX_CLIP_VERTS = 4;
 
   Vertex clipped[MAX_CLIP_VERTS];
@@ -601,8 +603,10 @@ void draw_triangle_wireframe(Vertex const *verts,
   for (int t = 0; t < tri_count; ++t)
   {
     Vertex tv[3] = {tris[t][0], tris[t][1], tris[t][2]};
+
     // Clip space -> NDC -> screen space
     vertex_to_screen(tv, fb);
+
     Vec4 v1 = tv[0].pos;
     Vec4 v2 = tv[1].pos;
     Vec4 v3 = tv[2].pos;
@@ -615,15 +619,15 @@ void draw_triangle_wireframe(Vertex const *verts,
     float fxmax = fmax(v1.x, fmax(v2.x, v3.x));
     float fymax = fmax(v1.y, fmax(v2.y, v3.y));
 
+    fxmin = fmaxf(fxmin, 0.0f);
+    fymin = fmaxf(fymin, 0.0f);
+    fxmax = fminf(fxmax, (float)fb->width - 1.0f);
+    fymax = fminf(fymax, (float)fb->height - 1.0f);
+
     int32_t xmin = (int32_t)fxmin;
     int32_t ymin = (int32_t)fymin;
     int32_t xmax = (int32_t)fxmax;
     int32_t ymax = (int32_t)fymax;
-
-    xmin = xmin < 0 ? 0 : xmin;
-    ymin = ymin < 0 ? 0 : ymin;
-    xmax = xmax > fb->width ? fb->width - 1 : xmax;
-    ymax = ymax > fb->height ? fb->height - 1 : ymax;
 
     if (triangle)
     {
@@ -676,37 +680,36 @@ void draw_triangle(Vertex const   *verts,
   for (int t = 0; t < tri_count; ++t)
   {
     Vertex tv[3] = {tris[t][0], tris[t][1], tris[t][2]};
+
     // Clip space -> NDC -> screen space
     vertex_to_screen(tv, fb);
+
     Vec4 v1 = tv[0].pos;
     Vec4 v2 = tv[1].pos;
     Vec4 v3 = tv[2].pos;
+
+    float area = (v2.x - v1.x) * (v3.y - v1.y) - (v2.y - v1.y) * (v3.x - v1.x);
+    if (backface_culling && area >= 0) continue;
 
     float fxmin = fmin(v1.x, fmin(v2.x, v3.x));
     float fymin = fmin(v1.y, fmin(v2.y, v3.y));
     float fxmax = fmax(v1.x, fmax(v2.x, v3.x));
     float fymax = fmax(v1.y, fmax(v2.y, v3.y));
 
+    fxmin = fmaxf(fxmin, 0.0f);
+    fymin = fmaxf(fymin, 0.0f);
+    fxmax = fminf(fxmax, (float)fb->width - 1.0f);
+    fymax = fminf(fymax, (float)fb->height - 1.0f);
+
     int32_t xmin = (int32_t)fxmin;
     int32_t ymin = (int32_t)fymin;
     int32_t xmax = (int32_t)fxmax;
     int32_t ymax = (int32_t)fymax;
 
-    xmin = xmin < 0 ? 0 : xmin;
-    ymin = ymin < 0 ? 0 : ymin;
-    xmax = xmax > fb->width ? fb->width - 1 : xmax;
-    ymax = ymax > fb->height ? fb->height - 1 : ymax;
-
-    Vec4 const v12 = vec4_sub(v2, v1);
-    Vec4 const v13 = vec4_sub(v3, v1);
-
-    float area = v12.x * v13.y - v12.y * v13.x;
-    if (backface_culling && area >= 0) continue;
-
     if (fabsf(area) < 1e-8f) continue;
 
-    for (size_t x = xmin; x <= xmax; ++x)
-      for (size_t y = ymin; y <= ymax; ++y)
+    for (int32_t x = xmin; x <= xmax; ++x)
+      for (int32_t y = ymin; y <= ymax; ++y)
       {
         Vec3  p  = new_vec3((float)x + 0.5f, (float)y + 0.5f, 0.0f);
         float w0 = (v3.x - v2.x) * (p.y - v2.y) - (v3.y - v2.y) * (p.x - v2.x);
@@ -1081,7 +1084,7 @@ int main(int argc, char *argv[])
   {
     // WARN: only call once per frame
     double const dt = get_frame_delta();
-    // printf("frame time: %.4f seconds => FPS: %d\n", dt, (int)(1.0 / dt));
+    printf("frame time: %.4f seconds => FPS: %d\n", dt, (int)(1.0 / dt));
 
     poll_input(cfg, &quit, &input_state);
 
@@ -1092,9 +1095,9 @@ int main(int argc, char *argv[])
     // model-to-world
     static float angle = 0.0f;
     angle += dt;
-    // scene[0].mtw = rotate_y(angle);
-    // scene[1].mtw = mat4_mult(translate(-7.5f, 0.0f, 0.0f), rotate_y(angle));
-    // scene[2].mtw = mat4_mult(translate(7.5f, 0.0f, 0.0f), rotate_y(angle));
+    scene[0].mtw = rotate_y(angle);
+    scene[1].mtw = mat4_mult(translate(-7.5f, 0.0f, 0.0f), rotate_y(angle));
+    scene[2].mtw = mat4_mult(translate(7.5f, 0.0f, 0.0f), rotate_y(angle));
 
     // world-to-view
     Mat4 view = look_at(camera.camera_pos,
@@ -1109,16 +1112,15 @@ int main(int argc, char *argv[])
     // Draw models
     for (unsigned i = 0; i < NR_MODELS; ++i)
     {
-      // draw_model(&scene[i], &view, &projection, &camera.camera_pos, fb,
-      // true);
-      bool triangle = false, bbox = true;
-      draw_model_wireframe(&scene[i],
-                           &view,
-                           &projection,
-                           &camera.camera_pos,
-                           fb,
-                           triangle,
-                           bbox);
+      draw_model(&scene[i], &view, &projection, &camera.camera_pos, fb, true);
+      // bool triangle = false, bbox = true;
+      // draw_model_wireframe(&scene[i],
+      //                      &view,
+      //                      &projection,
+      //                      &camera.camera_pos,
+      //                      fb,
+      //                      triangle,
+      //                      bbox);
     }
     update_window(cfg, render_img, disp_img, db, fb);
   };
