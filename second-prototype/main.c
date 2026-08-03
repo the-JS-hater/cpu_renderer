@@ -783,7 +783,7 @@ void draw_model_wireframe(Model const *model,
 void draw_model(Model const *model,
                 Mat4 const  *view,
                 Mat4 const  *projection,
-                Vec3        *camera_pos,
+                Vec3 const  *camera_pos,
                 FrameBuffer *fb,
                 bool         backface_culling)
 {
@@ -825,6 +825,25 @@ void draw_model(Model const *model,
                   model->tex,
                   fb,
                   backface_culling);
+  }
+}
+
+void draw_scene(Model        *scene,
+                size_t        nr_models,
+                Mat4 const   *view,
+                Mat4 const   *projection,
+                Camera const *camera,
+                FrameBuffer  *fb,
+                bool          backface_culling)
+{
+  for (unsigned i = 0; i < nr_models; ++i)
+  {
+    draw_model(&scene[i],
+               view,
+               projection,
+               &camera->camera_pos,
+               fb,
+               backface_culling);
   }
 }
 
@@ -1109,19 +1128,22 @@ int main(int argc, char *argv[])
     float aspect     = ((float)cfg->win_w / (float)cfg->win_h);
     Mat4  projection = perspective(fov * (M_PI / 180.0f), aspect, near, far);
 
-    // Draw models
-    for (unsigned i = 0; i < NR_MODELS; ++i)
-    {
-      draw_model(&scene[i], &view, &projection, &camera.camera_pos, fb, true);
-      // bool triangle = false, bbox = true;
-      // draw_model_wireframe(&scene[i],
-      //                      &view,
-      //                      &projection,
-      //                      &camera.camera_pos,
-      //                      fb,
-      //                      triangle,
-      //                      bbox);
-    }
+    // Draw wireframe debugging
+    // for (unsigned i = 0; i < NR_MODELS; ++i)
+    // {
+    //   bool triangle = false, bbox = true;
+    //   draw_model_wireframe(&scene[i],
+    //                        &view,
+    //                        &projection,
+    //                        &camera.camera_pos,
+    //                        fb,
+    //                        triangle,
+    //                        bbox);
+    // }
+
+    // Draw all the models
+    draw_scene(scene, NR_MODELS, &view, &projection, &camera, fb, true);
+
     update_window(cfg, render_img, disp_img, db, fb);
   };
   close_window(cfg);
