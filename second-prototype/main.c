@@ -572,19 +572,15 @@ void draw_triangle(Vertex const   *verts,
     float fxmax = fmax(v1.x, fmax(v2.x, v3.x));
     float fymax = fmax(v1.y, fmax(v2.y, v3.y));
 
-    fxmin         = fmaxf(fxmin, 0.0f);
-    fymin         = fmaxf(fymin, 0.0f);
-    fxmax         = fminf(fxmax, (float)fb->width - 1);
-    fymax         = fminf(fymax, (float)fb->height - 1);
-    uint32_t xmin = (uint32_t)fxmin;
-    uint32_t ymin = (uint32_t)fymin;
-    uint32_t xmax = (uint32_t)fxmax;
-    uint32_t ymax = (uint32_t)fymax;
+    int32_t xmin = (int32_t)fxmin;
+    int32_t ymin = (int32_t)fymin;
+    int32_t xmax = (int32_t)fxmax;
+    int32_t ymax = (int32_t)fymax;
 
     xmin = xmin < 0 ? 0 : xmin;
     ymin = ymin < 0 ? 0 : ymin;
-    xmax = xmax >= fb->width ? fb->width - 1 : xmax;
-    ymax = ymax >= fb->height ? fb->height - 1 : ymax;
+    xmax = xmax > fb->width ? fb->width - 1 : xmax;
+    ymax = ymax > fb->height ? fb->height - 1 : ymax;
 
     Vec4 const v12 = vec4_sub(v2, v1);
     Vec4 const v13 = vec4_sub(v3, v1);

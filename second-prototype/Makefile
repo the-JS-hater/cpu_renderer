@@ -1,7 +1,7 @@
 TARGET=render.exe
 LIBS=-lm -lX11
 CC=gcc
-CFLAGS=-Wall -O2
+CFLAGS=-Wall -O3
 
 SOURCES=$(shell find . -name "*.c")
 OBJECTS=$(SOURCES:.c=.o)
