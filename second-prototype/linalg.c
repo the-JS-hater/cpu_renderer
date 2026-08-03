@@ -45,6 +45,12 @@ float vec3_dist(Vec3 v, Vec3 u) { return vec3_length(vec3_sub(v, u)); }
 
 float dot3(Vec3 v, Vec3 u) { return (v.x * u.x + v.y * u.y + v.z * u.z); }
 
+Vec3 vec3_mult(Vec3 v, Vec3 u)
+{
+  return new_vec3(v.x * u.x, v.y * u.y, v.z * u.z);
+}
+
+
 float vec3_angle(Vec3 v, Vec3 u)
 {
   return acosf(dot3(v, u) / (vec3_length(v) * vec3_length(u)));

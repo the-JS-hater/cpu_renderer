@@ -67,6 +67,12 @@ typedef struct {
   unsigned char *data;
 } Texture;
 
+typedef struct {
+  float ambient_coeff, diffuse_coeff;
+  float shininess, specular_strength;
+  Vec3  specular_color;
+} Material;
+
 typedef enum { CLAMP, WRAP } SampleMode;
 
 typedef struct {
@@ -77,8 +83,10 @@ typedef struct {
 } Mesh;
 
 typedef struct {
-  Mesh mesh;
-  Mat4 mtw;
+  Mesh     mesh;
+  Mat4     mtw;
+  Texture *tex;
+  Material material;
 } Model;
 
 typedef enum {
@@ -462,13 +470,14 @@ void vertex_to_screen(Vertex *verts, FrameBuffer *fb)
   }
 }
 
-void draw_triangle(Vertex      *verts,
-                   size_t       idx1,
-                   size_t       idx2,
-                   size_t       idx3,
-                   Vec3        *camera_pos,
-                   FrameBuffer *fb,
-                   bool         backface_culling)
+void draw_triangle(Vertex const   *verts,
+                   size_t const    idx1,
+                   size_t const    idx2,
+                   size_t const    idx3,
+                   Vec3 const     *camera_pos,
+                   Material const *material,
+                   FrameBuffer    *fb,
+                   bool            backface_culling)
 {
   // NOTE: Assumes vertices are in clip space
   Vertex v[3] = {
@@ -557,30 +566,32 @@ void draw_triangle(Vertex      *verts,
           float tex_a = ((texture_color >> 24) & 0xFF) / 255.0f;
 
           // PHONG LIGHTING
-          Vec3  light_pos           = new_vec3(0, 5, 5);
-          Vec3  light_color         = new_vec3(1.0, 0.1, 0.1);
-          Vec3  ambient_light_color = new_vec3(0.5, 0.5, 0.5);
-          float reflectivity        = 0.6;
-          float shininess           = 64.0f;
-          float specular_strength   = 0.75f;
-          Vec3  normal              = vec3_norm(
+          Vec3 light_pos           = new_vec3(0, 5, 5);
+          Vec3 light_color         = new_vec3(1.0, 0.1, 0.1);
+          Vec3 ambient_light_color = new_vec3(0.5, 0.5, 0.5);
+
+          Vec3 normal = vec3_norm(
             new_vec3(varying[NORMAL_X], varying[NORMAL_Y], varying[NORMAL_Z]));
           Vec3  surface          = new_vec3(varying[SURFACE_X],
                                   varying[SURFACE_Y],
                                   varying[SURFACE_Z]);
           Vec3  view_dir         = vec3_norm(vec3_sub(*camera_pos, surface));
           Vec3  surface_to_light = vec3_norm(vec3_sub(light_pos, surface));
-          float angle            = fmaxf(0.0f, dot3(normal, surface_to_light));
+          float dot_nl           = dot3(normal, surface_to_light);
+          float angle            = fmaxf(0.0f, dot_nl);
           Vec3  reflect_dir      = vec3_norm(
-            vec3_sub(vec3_mult_val(normal, 2.0f * angle), surface_to_light));
-          float spec_angle  = fmaxf(0.0f, dot3(normal, reflect_dir));
-          float spec_factor = powf(spec_angle, shininess);
+            vec3_sub(vec3_mult_val(normal, 2.0f * dot_nl), surface_to_light));
+          float spec_angle  = fmaxf(0.0f, dot3(reflect_dir, view_dir));
+          float spec_factor = powf(spec_angle, material->shininess);
 
-          Vec3 ambient_light = vec3_mult_val(ambient_light_color, reflectivity);
+          Vec3 ambient_light =
+            vec3_mult_val(ambient_light_color, material->ambient_coeff);
           Vec3 diffuse_light =
-            vec3_mult_val(vec3_mult_val(light_color, reflectivity), angle);
+            vec3_mult_val(vec3_mult_val(light_color, material->diffuse_coeff),
+                          angle);
           Vec3 specular_light =
-            vec3_mult_val(light_color, specular_strength * spec_factor);
+            vec3_mult_val(vec3_mult(light_color, material->specular_color),
+                          material->specular_strength * spec_factor);
           Vec3 total_light = vec3_add(ambient_light, diffuse_light);
 
           specular_light.x = fminf(1.0f, specular_light.x);
@@ -596,6 +607,50 @@ void draw_triangle(Vertex      *verts,
             fminf(1.0f, tex_g * total_light.y + specular_light.y) * 255.0f,
             fminf(1.0f, tex_b * total_light.z + specular_light.z) * 255.0f,
             tex_a * 255.0f);
+
+
+          // PHONG LIGHTING
+          // Vec3 light_pos           = new_vec3(0, 5, 5);
+          // Vec3 light_color         = new_vec3(1.0, 0.1, 0.1);
+          // Vec3 ambient_light_color = new_vec3(0.5, 0.5, 0.5);
+
+          // Vec3 normal = vec3_norm(
+          //   new_vec3(varying[NORMAL_X], varying[NORMAL_Y],
+          //   varying[NORMAL_Z]));
+          // Vec3  surface          = new_vec3(varying[SURFACE_X],
+          //                         varying[SURFACE_Y],
+          //                         varying[SURFACE_Z]);
+          // Vec3  view_dir         = vec3_norm(vec3_sub(*camera_pos, surface));
+          // Vec3  surface_to_light = vec3_norm(vec3_sub(light_pos, surface));
+          // float angle            = fmaxf(0.0f, dot3(normal,
+          // surface_to_light)); Vec3  reflect_dir      = vec3_norm(
+          //   vec3_sub(vec3_mult_val(normal, 2.0f * angle), surface_to_light));
+          // float spec_angle  = fmaxf(0.0f, dot3(reflect_dir, view_dir));
+          // float spec_factor = powf(spec_angle, material->shininess);
+
+          // Vec3 ambient_light =
+          //   vec3_mult_val(ambient_light_color, material->reflectivity);
+          // Vec3 diffuse_light =
+          //   vec3_mult_val(vec3_mult_val(light_color, material->reflectivity),
+          //                 angle);
+          // Vec3 specular_light =
+          //   vec3_mult_val(light_color,
+          //                 material->specular_strength * spec_factor);
+          // Vec3 total_light = vec3_add(ambient_light, diffuse_light);
+
+          // specular_light.x = fminf(1.0f, specular_light.x);
+          // specular_light.y = fminf(1.0f, specular_light.y);
+          // specular_light.z = fminf(1.0f, specular_light.z);
+
+          // total_light.x = fminf(1.0f, total_light.x);
+          // total_light.y = fminf(1.0f, total_light.y);
+          // total_light.z = fminf(1.0f, total_light.z);
+
+          // Color phong_color = pack_color(
+          //   fminf(1.0f, tex_r * total_light.x + specular_light.x) * 255.0f,
+          //   fminf(1.0f, tex_g * total_light.y + specular_light.y) * 255.0f,
+          //   fminf(1.0f, tex_b * total_light.z + specular_light.z) * 255.0f,
+          //   tex_a * 255.0f);
 
           fb->depth_buffer[fb->draw_idx][idx] = z;
           draw_pixel(x, y, phong_color, fb);
@@ -645,6 +700,7 @@ void draw_model(Model const *model,
                   idx2,
                   idx3,
                   camera_pos,
+                  &model->material,
                   fb,
                   backface_culling);
   }
@@ -839,28 +895,55 @@ int main(int argc, char *argv[])
          render_img->green_mask,
          render_img->blue_mask);
 
-  Model teapot_model = load_model("models/teapot.obj");
-  teapot_model.mtw   = identity();
   load_texture(&tex0, "textures/placeholder128x128.png");
   load_texture(&tex1, "textures/placeholder16x16.png");
+  Model teapot_model       = load_model("models/teapot.obj");
+  Model teapot_model_matte = load_model("models/teapot.obj");
+  Model teapot_model_shiny = load_model("models/teapot.obj");
+  teapot_model.mtw         = identity();
+  teapot_model.tex         = &tex1;
+  teapot_model_matte.mtw   = translate(-7.5, 0.0, 0.0);
+  teapot_model_matte.tex   = &tex1;
+  teapot_model_shiny.mtw   = translate(7.5, 0.0, 0.0);
+  teapot_model_shiny.tex   = &tex1;
+
+  Material matte_material = {
+    .ambient_coeff     = 0.15f,
+    .diffuse_coeff     = 0.85f,
+    .specular_strength = 0.05f,
+    .shininess         = 4.0f,
+    .specular_color    = {1.0f, 1.0f, 1.0f},
+  };
+  Material porcelain_material = {
+    .ambient_coeff     = 0.12f,
+    .diffuse_coeff     = 0.45f,
+    .specular_strength = 0.85f,
+    .shininess         = 120.0f,
+    .specular_color    = {1.0f, 1.0f, 1.0f},
+  };
+  Material metallic_material = {
+    .ambient_coeff     = 0.10f,
+    .diffuse_coeff     = 0.15f,
+    .specular_strength = 0.9f,
+    .shininess         = 60.0f,
+    .specular_color    = {0.9f, 0.9f, 0.9f},
+  };
+  teapot_model.material       = porcelain_material;
+  teapot_model_matte.material = matte_material;
+  teapot_model_shiny.material = metallic_material;
 
   for (size_t i = 0; i < teapot_model.mesh.vertex_count; i++)
   {
     Vertex *v = &teapot_model.mesh.verts[i];
 
-    // v->varying[COLOR_R] = v->varying[NORMAL_X] * 0.5f + 0.5f;
-    // v->varying[COLOR_G] = v->varying[NORMAL_Y] * 0.5f + 0.5f;
-    // v->varying[COLOR_B] = v->varying[NORMAL_Z] * 0.5f + 0.5f;
-    v->varying[COLOR_R] = 0.8f;
-    v->varying[COLOR_G] = 0.8f;
-    v->varying[COLOR_B] = 0.8f;
-    v->varying[COLOR_A] = 1.0f;
+    v->varying[COLOR_R] = v->varying[NORMAL_X] * 0.5f + 0.5f;
+    v->varying[COLOR_G] = v->varying[NORMAL_Y] * 0.5f + 0.5f;
+    v->varying[COLOR_B] = v->varying[NORMAL_Z] * 0.5f + 0.5f;
   }
-
   Camera camera = {
-    (Vec3){0.0f, 1.0f, 0.0f }, // up
-    (Vec3){0.0f, 0.0f, -1.0f}, // front
-    (Vec3){0.0f, 2.5f, 10.0f}, // pos
+    .camera_up    = (Vec3){0.0f, 1.0f, 0.0f },
+    .camera_front = (Vec3){0.0f, 0.0f, -1.0f},
+    .camera_pos   = (Vec3){0.0f, 2.5f, 10.0f},
   };
   clock_gettime(CLOCK_MONOTONIC, &last_frame);
 
@@ -895,6 +978,18 @@ int main(int argc, char *argv[])
 
     // Draw model
     draw_model(&teapot_model, &view, &projection, &camera.camera_pos, fb, true);
+    draw_model(&teapot_model_matte,
+               &view,
+               &projection,
+               &camera.camera_pos,
+               fb,
+               true);
+    draw_model(&teapot_model_shiny,
+               &view,
+               &projection,
+               &camera.camera_pos,
+               fb,
+               true);
 
     update_window(cfg, render_img, disp_img, db, fb);
   };
