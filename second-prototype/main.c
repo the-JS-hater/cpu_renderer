@@ -476,6 +476,60 @@ void vertex_to_screen(Vertex *verts, FrameBuffer *fb)
   }
 }
 
+Color shade_pixel(Texture        *tex,
+                  float const    *varying,
+                  Vec3 const     *camera_pos,
+                  Material const *material)
+{
+  // NOTE: Applies phong lighting
+  // should probably be made more generic/customizable/configurable or replaced
+  // by a shader program-like abstraction
+
+  Color texture_color = sample_texture(tex, WRAP, varying[UV_U], varying[UV_V]);
+  float tex_r         = ((texture_color >> 16) & 0xFF) / 255.0f;
+  float tex_g         = ((texture_color >> 8) & 0xFF) / 255.0f;
+  float tex_b         = (texture_color & 0xFF) / 255.0f;
+  float tex_a         = ((texture_color >> 24) & 0xFF) / 255.0f;
+
+  Vec3 normal = vec3_norm(
+    new_vec3(varying[NORMAL_X], varying[NORMAL_Y], varying[NORMAL_Z]));
+  Vec3 surface =
+    new_vec3(varying[SURFACE_X], varying[SURFACE_Y], varying[SURFACE_Z]);
+  Vec3  view_dir         = vec3_norm(vec3_sub(*camera_pos, surface));
+  Vec3  surface_to_light = vec3_norm(vec3_sub(light0.pos, surface));
+  float dot_nl           = dot3(normal, surface_to_light);
+  float angle            = fmaxf(0.0f, dot_nl);
+  Vec3  reflect_dir =
+    vec3_norm(vec3_sub(vec3_mult_val(normal, 2.0f * dot_nl), surface_to_light));
+  float spec_angle = fmaxf(0.0f, dot3(reflect_dir, view_dir));
+  float spec_factor =
+    (dot_nl > 0.0f) ? powf(spec_angle, material->shininess) : 0.0f;
+
+  Vec3 ambient_light =
+    vec3_mult_val(ambient_light_color, material->ambient_coeff);
+  Vec3 diffuse_light =
+    vec3_mult_val(vec3_mult_val(light0.color_vec, material->diffuse_coeff),
+                  angle);
+  Vec3 specular_light =
+    vec3_mult_val(vec3_mult(light0.color_vec, material->specular_color),
+                  material->specular_strength * spec_factor);
+  Vec3 total_light = vec3_add(ambient_light, diffuse_light);
+
+  specular_light.x = fminf(1.0f, specular_light.x);
+  specular_light.y = fminf(1.0f, specular_light.y);
+  specular_light.z = fminf(1.0f, specular_light.z);
+
+  total_light.x = fminf(1.0f, total_light.x);
+  total_light.y = fminf(1.0f, total_light.y);
+  total_light.z = fminf(1.0f, total_light.z);
+
+  return pack_color(
+    fminf(1.0f, tex_r * total_light.x + specular_light.x) * 255.0f,
+    fminf(1.0f, tex_g * total_light.y + specular_light.y) * 255.0f,
+    fminf(1.0f, tex_b * total_light.z + specular_light.z) * 255.0f,
+    tex_a * 255.0f);
+}
+
 void draw_triangle(Vertex const   *verts,
                    size_t const    idx1,
                    size_t const    idx2,
@@ -562,53 +616,7 @@ void draw_triangle(Vertex const   *verts,
                          bw2 * tv[2].varying[i];
           }
 
-          Color texture_color =
-            sample_texture(tex, WRAP, varying[UV_U], varying[UV_V]);
-          float tex_r = ((texture_color >> 16) & 0xFF) / 255.0f;
-          float tex_g = ((texture_color >> 8) & 0xFF) / 255.0f;
-          float tex_b = (texture_color & 0xFF) / 255.0f;
-          float tex_a = ((texture_color >> 24) & 0xFF) / 255.0f;
-
-          // PHONG LIGHTING
-          Vec3 normal = vec3_norm(
-            new_vec3(varying[NORMAL_X], varying[NORMAL_Y], varying[NORMAL_Z]));
-          Vec3  surface          = new_vec3(varying[SURFACE_X],
-                                  varying[SURFACE_Y],
-                                  varying[SURFACE_Z]);
-          Vec3  view_dir         = vec3_norm(vec3_sub(*camera_pos, surface));
-          Vec3  surface_to_light = vec3_norm(vec3_sub(light0.pos, surface));
-          float dot_nl           = dot3(normal, surface_to_light);
-          float angle            = fmaxf(0.0f, dot_nl);
-          Vec3  reflect_dir      = vec3_norm(
-            vec3_sub(vec3_mult_val(normal, 2.0f * dot_nl), surface_to_light));
-          float spec_angle = fmaxf(0.0f, dot3(reflect_dir, view_dir));
-          float spec_factor =
-            (dot_nl > 0.0f) ? powf(spec_angle, material->shininess) : 0.0f;
-
-          Vec3 ambient_light =
-            vec3_mult_val(ambient_light_color, material->ambient_coeff);
-          Vec3 diffuse_light = vec3_mult_val(
-            vec3_mult_val(light0.color_vec, material->diffuse_coeff),
-            angle);
-          Vec3 specular_light =
-            vec3_mult_val(vec3_mult(light0.color_vec, material->specular_color),
-                          material->specular_strength * spec_factor);
-          Vec3 total_light = vec3_add(ambient_light, diffuse_light);
-
-          specular_light.x = fminf(1.0f, specular_light.x);
-          specular_light.y = fminf(1.0f, specular_light.y);
-          specular_light.z = fminf(1.0f, specular_light.z);
-
-          total_light.x = fminf(1.0f, total_light.x);
-          total_light.y = fminf(1.0f, total_light.y);
-          total_light.z = fminf(1.0f, total_light.z);
-
-          Color phong_color = pack_color(
-            fminf(1.0f, tex_r * total_light.x + specular_light.x) * 255.0f,
-            fminf(1.0f, tex_g * total_light.y + specular_light.y) * 255.0f,
-            fminf(1.0f, tex_b * total_light.z + specular_light.z) * 255.0f,
-            tex_a * 255.0f);
-
+          Color phong_color = shade_pixel(tex, varying, camera_pos, material);
           fb->depth_buffer[fb->draw_idx][idx] = z;
           draw_pixel(x, y, phong_color, fb);
         }
