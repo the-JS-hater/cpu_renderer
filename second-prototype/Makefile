@@ -21,14 +21,15 @@ $(TARGET): $(OBJECTS)
 
 default: $(TARGET)
 all: default
-run: all
-	./$(TARGET) -w $(WINDOW) -r $(RESOLUTION)
 
-run-high-res: all
+run: all
+	./$(TARGET) -w $(WINDOW) -r $(LOW_RES)
+
+run-max-res: all
 	./$(TARGET) -w $(WINDOW) -r $(HIGH_RES)
 
-run-low-res: all
-	./$(TARGET) -w $(WINDOW) -r $(LOW_RES)
+run-high-res: all
+	./$(TARGET) -w $(WINDOW) -r $(RESOLUTION)
 
 clean:
 	-rm -f *.o
