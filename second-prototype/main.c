@@ -378,7 +378,7 @@ void draw_pixel(uint32_t const x,
   fb->color_buffer[fb->draw_idx][idx] = color;
 }
 
-void draw_line(FrameBuffer *fb, Vec4 const s, Vec4 const e, Color color)
+void draw_line(FrameBuffer *fb, Vec4 const s, Vec4 const e, Color const color)
 {
   int32_t x0 = (int32_t)roundf(s.x);
   int32_t y0 = (int32_t)roundf(s.y);
@@ -421,7 +421,10 @@ void draw_line(FrameBuffer *fb, Vec4 const s, Vec4 const e, Color color)
   }
 }
 
-uint32_t pack_color(float in_r, float in_g, float in_b, float in_a)
+uint32_t pack_color(float const in_r,
+                    float const in_g,
+                    float const in_b,
+                    float const in_a)
 {
   uint32_t r = (uint32_t)(in_r);
   uint32_t g = (uint32_t)(in_g);
@@ -430,7 +433,7 @@ uint32_t pack_color(float in_r, float in_g, float in_b, float in_a)
   return (a << 24) | (r << 16) | (g << 8) | b;
 }
 
-uint32_t sample_texture(Texture *tex, SampleMode mode, float u, float v)
+uint32_t sample_texture(Texture const *tex, SampleMode mode, float u, float v)
 {
   int32_t x = (int32_t)(u * tex->width);
   int32_t y = (int32_t)(v * tex->height);
@@ -522,7 +525,7 @@ void vertex_to_screen(Vertex *verts, FrameBuffer *fb)
   }
 }
 
-Color shade_pixel(Texture        *tex,
+Color shade_pixel(Texture const  *tex,
                   float const    *varying,
                   Vec3 const     *camera_pos,
                   Material const *material)
@@ -656,7 +659,7 @@ void draw_triangle(Vertex const   *verts,
                    size_t const    idx3,
                    Vec3 const     *camera_pos,
                    Material const *material,
-                   Texture        *tex,
+                   Texture const  *tex,
                    FrameBuffer    *fb,
                    bool const      backface_culling)
 {
@@ -701,36 +704,47 @@ void draw_triangle(Vertex const   *verts,
     fxmax = fminf(fxmax, (float)fb->width - 1.0f);
     fymax = fminf(fymax, (float)fb->height - 1.0f);
 
+    float maxx = (float)fb->width - 1.0f;
+    float maxy = (float)fb->height - 1.0f;
+
+    if (fxmax > maxx) fxmax = maxx;
+    if (fymax > maxy) fymax = maxy;
+
     int32_t xmin = (int32_t)fxmin;
     int32_t ymin = (int32_t)fymin;
     int32_t xmax = (int32_t)fxmax;
     int32_t ymax = (int32_t)fymax;
 
-    if (fabsf(area) < 1e-8f) continue;
-
     for (int32_t x = xmin; x <= xmax; ++x)
       for (int32_t y = ymin; y <= ymax; ++y)
       {
-        Vec3  p  = new_vec3((float)x + 0.5f, (float)y + 0.5f, 0.0f);
-        float w0 = (v3.x - v2.x) * (p.y - v2.y) - (v3.y - v2.y) * (p.x - v2.x);
-        float w1 = (v1.x - v3.x) * (p.y - v3.y) - (v1.y - v3.y) * (p.x - v3.x);
-        float w2 = (v2.x - v1.x) * (p.y - v1.y) - (v2.y - v1.y) * (p.x - v1.x);
+        Vec3 const  p = new_vec3((float)x + 0.5f, (float)y + 0.5f, 0.0f);
+        float const w0 =
+          (v3.x - v2.x) * (p.y - v2.y) - (v3.y - v2.y) * (p.x - v2.x);
+        float const w1 =
+          (v1.x - v3.x) * (p.y - v3.y) - (v1.y - v3.y) * (p.x - v3.x);
+        float const w2 =
+          (v2.x - v1.x) * (p.y - v1.y) - (v2.y - v1.y) * (p.x - v1.x);
+
         if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0))
         {
-          float  bw0 = w0 / area;
-          float  bw1 = w1 / area;
-          float  bw2 = w2 / area;
-          float  z   = bw0 * v1.z + bw1 * v2.z + bw2 * v3.z;
-          size_t idx = y * fb->width + x;
+          float const  bw0 = w0 / area;
+          float const  bw1 = w1 / area;
+          float const  bw2 = w2 / area;
+          float const  z   = bw0 * v1.z + bw1 * v2.z + bw2 * v3.z;
+          size_t const idx = y * fb->width + x;
+
           if (z >= fb->depth_buffer[fb->draw_idx][idx]) continue;
+
           float varying[MAX_VARYING_ATTRS];
           for (int i = 0; i < MAX_VARYING_ATTRS; ++i)
           {
             varying[i] = bw0 * tv[0].varying[i] + bw1 * tv[1].varying[i] +
                          bw2 * tv[2].varying[i];
           }
+          Color const phong_color =
+            shade_pixel(tex, varying, camera_pos, material);
 
-          Color phong_color = shade_pixel(tex, varying, camera_pos, material);
           fb->depth_buffer[fb->draw_idx][idx] = z;
           draw_pixel(x, y, phong_color, fb);
         }
@@ -1131,7 +1145,7 @@ int main(int argc, char *argv[])
     // Draw wireframe debugging
     // for (unsigned i = 0; i < NR_MODELS; ++i)
     // {
-    //   bool triangle = false, bbox = true;
+    //   bool triangle = true, bbox = false;
     //   draw_model_wireframe(&scene[i],
     //                        &view,
     //                        &projection,
