@@ -2,8 +2,7 @@ TARGET=render.exe
 
 LIBS=-lm -lX11
 CC=gcc
-
-CFLAGS=-Wall -O3
+CFLAGS=-Wall -march=native -O3
 
 SOURCES=$(shell find . -name "*.c")
 OBJECTS=$(SOURCES:.c=.o)

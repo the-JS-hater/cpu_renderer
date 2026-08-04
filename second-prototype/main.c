@@ -253,17 +253,20 @@ DisplayBuffer *init_display_buffer(unsigned width, unsigned height)
   return db;
 }
 
-void resample_nearest(FrameBuffer const *fb, DisplayBuffer *db)
+void resample_nearest(uint32_t const *restrict src,
+                      uint32_t *restrict dst,
+                      uint32_t const db_width,
+                      uint32_t const db_height,
+                      uint32_t const fb_width,
+                      uint32_t const fb_height)
 {
-  uint32_t const *src = fb->color_buffer[fb->draw_idx];
-
-  for (unsigned y = 0; y < db->height; ++y)
+  for (uint32_t y = 0; y < db_height; ++y)
   {
-    unsigned sy = (uint64_t)y * fb->height / db->height;
-    for (unsigned x = 0; x < db->width; ++x)
+    uint32_t sy = y * fb_height / db_height;
+    for (uint32_t x = 0; x < db_width; ++x)
     {
-      unsigned sx                   = (uint64_t)x * fb->width / db->width;
-      db->pixels[y * db->width + x] = src[sy * fb->width + sx];
+      uint32_t sx           = x * fb_width / db_width;
+      dst[y * db_width + x] = src[sy * fb_width + sx];
     }
   }
 }
@@ -274,7 +277,12 @@ void update_window(AppConfig const *cfg,
                    DisplayBuffer   *db,
                    FrameBuffer     *fb)
 {
-  resample_nearest(fb, db);
+  resample_nearest(fb->color_buffer[fb->draw_idx],
+                   db->pixels,
+                   db->width,
+                   db->height,
+                   fb->width,
+                   fb->height);
   XPutImage(cfg->display,
             cfg->window,
             DefaultGC(cfg->display, cfg->screen),
@@ -372,9 +380,7 @@ void draw_pixel(uint32_t const x,
                 Color const    color,
                 FrameBuffer   *fb)
 {
-  size_t const idx  = y * fb->width + x;
-  size_t const size = fb->width * fb->height;
-  if (idx >= size) return;
+  size_t const idx                    = y * fb->width + x;
   fb->color_buffer[fb->draw_idx][idx] = color;
 }
 
@@ -421,10 +427,10 @@ void draw_line(FrameBuffer *fb, Vec4 const s, Vec4 const e, Color const color)
   }
 }
 
-uint32_t pack_color(float const in_r,
-                    float const in_g,
-                    float const in_b,
-                    float const in_a)
+inline uint32_t pack_color(float const in_r,
+                           float const in_g,
+                           float const in_b,
+                           float const in_a)
 {
   uint32_t r = (uint32_t)(in_r);
   uint32_t g = (uint32_t)(in_g);
@@ -433,8 +439,15 @@ uint32_t pack_color(float const in_r,
   return (a << 24) | (r << 16) | (g << 8) | b;
 }
 
-uint32_t sample_texture(Texture const *tex, SampleMode mode, float u, float v)
+uint32_t sample_texture(Texture const   *tex,
+                        SampleMode const mode,
+                        float const      u,
+                        float const      v)
 {
+  // NOTE: getting rid of clamped and using % for wrapping idx this might be
+  // alot more vectorizable, or somehow convice the compiler mode will be same
+  // for whole loop
+
   int32_t x = (int32_t)(u * tex->width);
   int32_t y = (int32_t)(v * tex->height);
 
@@ -448,8 +461,8 @@ uint32_t sample_texture(Texture const *tex, SampleMode mode, float u, float v)
     float wu = u - floorf(u);
     float wv = v - floorf(v);
 
-    x = (int)(wu * tex->width);
-    y = (int)(wv * tex->height);
+    x = (int32_t)(wu * tex->width);
+    y = (int32_t)(wv * tex->height);
 
     x = (x >= tex->width) ? tex->width - 1 : x;
     y = (y >= tex->height) ? tex->height - 1 : y;
@@ -461,21 +474,24 @@ uint32_t sample_texture(Texture const *tex, SampleMode mode, float u, float v)
                     tex->data[idx + 3]);
 }
 
-float near_distance(Vertex *v) { return v->pos.z + v->pos.w; }
+inline float near_distance(Vertex const *v) { return v->pos.z + v->pos.w; }
 
-Vertex lerp_vertex(Vertex *a, Vertex *b, float t)
+Vertex
+lerp_vertex(Vertex const *restrict v, Vertex const *restrict u, float const t)
 {
   Vertex out;
-  out.pos = vec4_lerp(a->pos, b->pos, t);
+  out.pos = vec4_lerp(v->pos, u->pos, t);
   for (int i = 0; i < MAX_VARYING_ATTRS; ++i)
-    out.varying[i] = a->varying[i] + t * (b->varying[i] - a->varying[i]);
+    out.varying[i] = v->varying[i] + t * (u->varying[i] - v->varying[i]);
+
   return out;
 }
 
-int triangulate_fan(Vertex *poly, int poly_count, Vertex tris_out[][3])
+int triangulate_fan(Vertex const *poly,
+                    int const     poly_count,
+                    Vertex        tris_out[][3])
 {
   if (poly_count < 3) return 0;
-
   int tri_count = 0;
   for (int i = 1; i < poly_count - 1; ++i)
   {
@@ -487,15 +503,15 @@ int triangulate_fan(Vertex *poly, int poly_count, Vertex tris_out[][3])
   return tri_count;
 }
 
-int clip_triangle_near(Vertex in[3], Vertex out[4])
+int32_t clip_triangle_near(Vertex const in[3], Vertex out[4])
 {
-  int count = 0;
+  int32_t count = 0;
   for (int i = 0; i < 3; ++i)
   {
-    Vertex *curr   = &in[i];
-    Vertex *prev   = &in[(i + 2) % 3];
-    float   d_curr = near_distance(curr);
-    float   d_prev = near_distance(prev);
+    Vertex const *curr   = &in[i];
+    Vertex const *prev   = &in[(i + 2) % 3];
+    float         d_curr = near_distance(curr);
+    float         d_prev = near_distance(prev);
 
     static float const NEAR_EPS = 1e-4f;
 
@@ -512,16 +528,17 @@ int clip_triangle_near(Vertex in[3], Vertex out[4])
   return count;
 }
 
-void vertex_to_screen(Vertex *verts, FrameBuffer *fb)
+void vertex_to_screen(Vertex        *verts,
+                      uint32_t const fb_width,
+                      uint32_t const fb_height)
 {
-  for (int i = 0; i < 3; i++)
+  for (uint8_t i = 0; i < 3; i++)
   {
     verts[i].pos.x /= verts[i].pos.w;
     verts[i].pos.y /= verts[i].pos.w;
     verts[i].pos.z /= verts[i].pos.w;
-
-    verts[i].pos.x = (verts[i].pos.x + 1.0f) * 0.5f * fb->width;
-    verts[i].pos.y = (1.0f - verts[i].pos.y) * 0.5f * fb->height;
+    verts[i].pos.x = (verts[i].pos.x + 1.0f) * 0.5f * fb_width;
+    verts[i].pos.y = (1.0f - verts[i].pos.y) * 0.5f * fb_height;
   }
 }
 
@@ -608,7 +625,7 @@ void draw_triangle_wireframe(Vertex const *verts,
     Vertex tv[3] = {tris[t][0], tris[t][1], tris[t][2]};
 
     // Clip space -> NDC -> screen space
-    vertex_to_screen(tv, fb);
+    vertex_to_screen(tv, fb->width, fb->height);
 
     Vec4 v1 = tv[0].pos;
     Vec4 v2 = tv[1].pos;
@@ -685,11 +702,11 @@ void draw_triangle(Vertex const   *verts,
     Vertex tv[3] = {tris[t][0], tris[t][1], tris[t][2]};
 
     // Clip space -> NDC -> screen space
-    vertex_to_screen(tv, fb);
+    vertex_to_screen(tv, fb->width, fb->height);
 
-    Vec4 v1 = tv[0].pos;
-    Vec4 v2 = tv[1].pos;
-    Vec4 v3 = tv[2].pos;
+    Vec4 const v1 = tv[0].pos;
+    Vec4 const v2 = tv[1].pos;
+    Vec4 const v3 = tv[2].pos;
 
     float area = (v2.x - v1.x) * (v3.y - v1.y) - (v2.y - v1.y) * (v3.x - v1.x);
     if (backface_culling && area >= 0) continue;
@@ -715,8 +732,12 @@ void draw_triangle(Vertex const   *verts,
     int32_t xmax = (int32_t)fxmax;
     int32_t ymax = (int32_t)fymax;
 
-    for (int32_t x = xmin; x <= xmax; ++x)
-      for (int32_t y = ymin; y <= ymax; ++y)
+    for (int32_t y = ymin; y <= ymax; ++y)
+      // NOTE:
+      // since we are iterating by y, we can compute the min x and max x here
+      // and limit the size of the inner loop significantly whitout sacrificing
+      // any data dependency or parralel potential
+      for (int32_t x = xmin; x <= xmax; ++x)
       {
         Vec3 const  p = new_vec3((float)x + 0.5f, (float)y + 0.5f, 0.0f);
         float const w0 =
@@ -734,8 +755,11 @@ void draw_triangle(Vertex const   *verts,
           float const  z   = bw0 * v1.z + bw1 * v2.z + bw2 * v3.z;
           size_t const idx = y * fb->width + x;
 
+          // NOTE: should empirically measure the early return vs. potential
+          // vectorization of using a masked write
           if (z >= fb->depth_buffer[fb->draw_idx][idx]) continue;
 
+          // TODO: helper func for this
           float varying[MAX_VARYING_ATTRS];
           for (int i = 0; i < MAX_VARYING_ATTRS; ++i)
           {
@@ -799,22 +823,25 @@ void draw_model(Model const *model,
                 Mat4 const  *projection,
                 Vec3 const  *camera_pos,
                 FrameBuffer *fb,
-                bool         backface_culling)
+                bool const   backface_culling)
 {
+  // NOTE: maybe move transformed buffer to the heap and reuse it
   Vertex transformed[model->mesh.vertex_count];
-  Mat3   normal_mat = mat3_transpose(mat3_inverse(mat4_to_mat3(model->mtw)));
+
+  Mat3 const normal_mat =
+    mat3_transpose(mat3_inverse(mat4_to_mat3(model->mtw)));
 
   for (size_t i = 0; i < model->mesh.vertex_count; ++i)
   {
     transformed[i] = model->mesh.verts[i];
 
-    Vec4 world_pos = transform(model->mtw, transformed[i].pos);
+    Vec4 const world_pos = transform(model->mtw, transformed[i].pos);
 
-    Vec3 local_normal = new_vec3(transformed[i].varying[NORMAL_X],
-                                 transformed[i].varying[NORMAL_Y],
-                                 transformed[i].varying[NORMAL_Z]);
+    Vec3 const local_normal = new_vec3(transformed[i].varying[NORMAL_X],
+                                       transformed[i].varying[NORMAL_Y],
+                                       transformed[i].varying[NORMAL_Z]);
 
-    Vec3 world_normal = transform_mat3(normal_mat, local_normal);
+    Vec3 const world_normal = transform_mat3(normal_mat, local_normal);
 
     transformed[i].varying[NORMAL_X]  = world_normal.x;
     transformed[i].varying[NORMAL_Y]  = world_normal.y;
@@ -827,9 +854,9 @@ void draw_model(Model const *model,
   }
   for (size_t offset = 0; offset < model->mesh.index_count; offset += 3)
   {
-    size_t idx1 = model->mesh.indices[offset];
-    size_t idx2 = model->mesh.indices[offset + 1];
-    size_t idx3 = model->mesh.indices[offset + 2];
+    size_t const idx1 = model->mesh.indices[offset];
+    size_t const idx2 = model->mesh.indices[offset + 1];
+    size_t const idx3 = model->mesh.indices[offset + 2];
     draw_triangle(transformed,
                   idx1,
                   idx2,
@@ -842,15 +869,15 @@ void draw_model(Model const *model,
   }
 }
 
-void draw_scene(Model        *scene,
-                size_t        nr_models,
+void draw_scene(Model const  *scene,
+                size_t const  nr_models,
                 Mat4 const   *view,
                 Mat4 const   *projection,
                 Camera const *camera,
                 FrameBuffer  *fb,
-                bool          backface_culling)
+                bool const    backface_culling)
 {
-  for (unsigned i = 0; i < nr_models; ++i)
+  for (size_t i = 0; i < nr_models; ++i)
   {
     draw_model(&scene[i],
                view,
@@ -861,12 +888,12 @@ void draw_scene(Model        *scene,
   }
 }
 
-Mat4 look_at(Vec3 pos, Vec3 target, Vec3 up)
+Mat4 look_at(Vec3 const pos, Vec3 const target, Vec3 const up)
 {
-  Vec3 cam_dir   = vec3_norm(vec3_sub(pos, target));
-  Vec3 cam_right = vec3_norm(cross(up, cam_dir));
-  Vec3 cam_up    = cross(cam_dir, cam_right);
-  Mat4 a         = (Mat4){
+  Vec3 const cam_dir   = vec3_norm(vec3_sub(pos, target));
+  Vec3 const cam_right = vec3_norm(cross(up, cam_dir));
+  Vec3 const cam_up    = cross(cam_dir, cam_right);
+  Mat4 const a         = (Mat4){
     cam_right.x,
     cam_up.x,
     cam_dir.x,
@@ -884,31 +911,30 @@ Mat4 look_at(Vec3 pos, Vec3 target, Vec3 up)
     0.0f,
     1.0f,
   };
-  Mat4 b = (Mat4){1.0f,
-                  0.0f,
-                  0.0f,
-                  0.0f,
-                  0.0f,
-                  1.0f,
-                  0.0f,
-                  0.0f,
-                  0.0f,
-                  0.0f,
-                  1.0f,
-                  0.0f,
-                  -pos.x,
-                  -pos.y,
-                  -pos.z,
-                  1.0f};
+  Mat4 const b = (Mat4){1.0f,
+                        0.0f,
+                        0.0f,
+                        0.0f,
+                        0.0f,
+                        1.0f,
+                        0.0f,
+                        0.0f,
+                        0.0f,
+                        0.0f,
+                        1.0f,
+                        0.0f,
+                        -pos.x,
+                        -pos.y,
+                        -pos.z,
+                        1.0f};
   return mat4_mult(a, b);
 }
 
-void clear_background(FrameBuffer *fb, Color color)
+void clear_background(FrameBuffer *fb, Color const color)
 {
-  int const size = fb->width * fb->height;
-
-  for (unsigned i = 0; i < size; ++i) fb->color_buffer[fb->draw_idx][i] = color;
-  for (unsigned i = 0; i < size; ++i)
+  uint32_t const size = fb->width * fb->height;
+  for (uint32_t i = 0; i < size; ++i) fb->color_buffer[fb->draw_idx][i] = color;
+  for (uint32_t i = 0; i < size; ++i)
     fb->depth_buffer[fb->draw_idx][i] = INFINITY;
 }
 
@@ -938,6 +964,7 @@ void poll_input(AppConfig *cfg, bool *quit, InputState *input)
       input->mouse_dx += x - center_x;
       input->mouse_dy += y - center_y;
     }
+    // NOTE: look into using scancodes instead of keycodes
     if (event.type == KeyPress)
     {
       switch (event.xkey.keycode)
@@ -968,16 +995,16 @@ void poll_input(AppConfig *cfg, bool *quit, InputState *input)
   XFlush(cfg->display);
 }
 
-void update_camera(Camera *camera, InputState const *input, double dt)
+void update_camera(Camera *camera, InputState const *input, double const dt)
 {
-  float const       speed             = 5.0f * (float)dt;
-  float const       mouse_sensitivity = 0.00025f;
-  static Vec3 const world_up          = {0.0f, 1.0f, 0.0f};
-  float const       pitch_limit       = 89.0f * (M_PI / 180.0f);
+  float const speed             = 5.0f * (float)dt;
+  float const mouse_sensitivity = 0.00025f;
+  Vec3 const  world_up          = {0.0f, 1.0f, 0.0f};
+  float const pitch_limit       = 89.0f * (M_PI / 180.0f);
 
-  Vec3  f     = camera->camera_front;
-  float yaw   = atan2f(f.z, f.x);
-  float pitch = asinf(f.y);
+  Vec3 const f     = camera->camera_front;
+  float      yaw   = atan2f(f.z, f.x);
+  float      pitch = asinf(f.y);
 
   yaw += input->mouse_dx * mouse_sensitivity;
   pitch -= input->mouse_dy * mouse_sensitivity;
@@ -1109,6 +1136,12 @@ int main(int argc, char *argv[])
     .camera_front = (Vec3){0.0f, 0.0f, -1.0f},
     .camera_pos   = (Vec3){0.0f, 2.5f, 10.0f},
   };
+
+  // projection
+  float const fov = 65.0, near = 0.05, far = 100.0;
+  float const aspect    = ((float)cfg->win_w / (float)cfg->win_h);
+  Mat4 const projection = perspective(fov * (M_PI / 180.0f), aspect, near, far);
+
   clock_gettime(CLOCK_MONOTONIC, &last_frame);
 
   InputState  input_state = {0};
@@ -1136,11 +1169,6 @@ int main(int argc, char *argv[])
     Mat4 view = look_at(camera.camera_pos,
                         vec3_add(camera.camera_pos, camera.camera_front),
                         camera.camera_up);
-
-    // projection
-    float fov = 65.0, near = 0.05, far = 100.0;
-    float aspect     = ((float)cfg->win_w / (float)cfg->win_h);
-    Mat4  projection = perspective(fov * (M_PI / 180.0f), aspect, near, far);
 
     // Draw wireframe debugging
     // for (unsigned i = 0; i < NR_MODELS; ++i)
