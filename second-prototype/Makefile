@@ -44,7 +44,7 @@ debug: clean $(TARGET)
 gdb: debug
 	gdb --args ./$(TARGET) -w $(WINDOW) -r $(LOW_RES)
 
-perf: CFLAGS=-Wall -g -O2
+perf: CFLAGS=-Wall -g -O3
 perf: clean $(TARGET)
 	perf record -g ./$(TARGET) -w $(WINDOW) -r $(RESOLUTION)
 	perf report

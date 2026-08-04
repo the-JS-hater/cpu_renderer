@@ -427,10 +427,10 @@ void draw_line(FrameBuffer *fb, Vec4 const s, Vec4 const e, Color const color)
   }
 }
 
-inline uint32_t pack_color(float const in_r,
-                           float const in_g,
-                           float const in_b,
-                           float const in_a)
+static inline uint32_t pack_color(float const in_r,
+                                  float const in_g,
+                                  float const in_b,
+                                  float const in_a)
 {
   uint32_t r = (uint32_t)(in_r);
   uint32_t g = (uint32_t)(in_g);
@@ -474,7 +474,10 @@ uint32_t sample_texture(Texture const   *tex,
                     tex->data[idx + 3]);
 }
 
-inline float near_distance(Vertex const *v) { return v->pos.z + v->pos.w; }
+static inline float near_distance(Vertex const *v)
+{
+  return v->pos.z + v->pos.w;
+}
 
 Vertex
 lerp_vertex(Vertex const *restrict v, Vertex const *restrict u, float const t)
@@ -547,10 +550,6 @@ Color shade_pixel(Texture const  *tex,
                   Vec3 const     *camera_pos,
                   Material const *material)
 {
-  // NOTE: Applies phong lighting
-  // should probably be made more generic/customizable/configurable or replaced
-  // by a shader program-like abstraction
-
   Color texture_color = sample_texture(tex, WRAP, varying[UV_U], varying[UV_V]);
   float tex_r         = ((texture_color >> 16) & 0xFF) / 255.0f;
   float tex_g         = ((texture_color >> 8) & 0xFF) / 255.0f;
@@ -670,6 +669,18 @@ void draw_triangle_wireframe(Vertex const *verts,
   }
 }
 
+void interpolate_attributes(float *restrict src,
+                            float const *restrict dst0,
+                            float const *restrict dst1,
+                            float const *restrict dst2,
+                            float const w0,
+                            float const w1,
+                            float const w2)
+{
+  for (size_t i = 0; i < MAX_VARYING_ATTRS; ++i)
+    src[i] = w0 * dst0[i] + w1 * dst1[i] + w2 * dst2[i];
+}
+
 void draw_triangle(Vertex const   *verts,
                    size_t const    idx1,
                    size_t const    idx2,
@@ -680,20 +691,19 @@ void draw_triangle(Vertex const   *verts,
                    FrameBuffer    *fb,
                    bool const      backface_culling)
 {
-  // NOTE: Assumes vertices are in clip space
-
   Vertex v[3] = {
     verts[idx1],
     verts[idx2],
     verts[idx3],
   };
+
   static int const MAX_CLIP_VERTS = 4;
 
   Vertex clipped[MAX_CLIP_VERTS];
   int    clipped_count = clip_triangle_near(v, clipped);
 
-  // fully behind near plane
   if (clipped_count < 3) return;
+
   Vertex tris[MAX_CLIP_VERTS - 2][3];
   int    tri_count = triangulate_fan(clipped, clipped_count, tris);
 
@@ -701,45 +711,84 @@ void draw_triangle(Vertex const   *verts,
   {
     Vertex tv[3] = {tris[t][0], tris[t][1], tris[t][2]};
 
-    // Clip space -> NDC -> screen space
     vertex_to_screen(tv, fb->width, fb->height);
 
     Vec4 const v1 = tv[0].pos;
     Vec4 const v2 = tv[1].pos;
     Vec4 const v3 = tv[2].pos;
 
-    float area = (v2.x - v1.x) * (v3.y - v1.y) - (v2.y - v1.y) * (v3.x - v1.x);
+    float const area =
+      (v2.x - v1.x) * (v3.y - v1.y) - (v2.y - v1.y) * (v3.x - v1.x);
+
     if (backface_culling && area >= 0) continue;
 
-    float fxmin = fmin(v1.x, fmin(v2.x, v3.x));
-    float fymin = fmin(v1.y, fmin(v2.y, v3.y));
-    float fxmax = fmax(v1.x, fmax(v2.x, v3.x));
-    float fymax = fmax(v1.y, fmax(v2.y, v3.y));
+    float fymin = fminf(v1.y, fminf(v2.y, v3.y));
+    float fymax = fmaxf(v1.y, fmaxf(v2.y, v3.y));
 
-    fxmin = fmaxf(fxmin, 0.0f);
     fymin = fmaxf(fymin, 0.0f);
-    fxmax = fminf(fxmax, (float)fb->width - 1.0f);
     fymax = fminf(fymax, (float)fb->height - 1.0f);
 
-    float maxx = (float)fb->width - 1.0f;
-    float maxy = (float)fb->height - 1.0f;
+    int32_t const ymin = (int32_t)fymin;
+    int32_t const ymax = (int32_t)fymax;
 
-    if (fxmax > maxx) fxmax = maxx;
-    if (fymax > maxy) fymax = maxy;
+    float const screen_xmax = (float)fb->width - 1.0f;
 
-    int32_t xmin = (int32_t)fxmin;
-    int32_t ymin = (int32_t)fymin;
-    int32_t xmax = (int32_t)fxmax;
-    int32_t ymax = (int32_t)fymax;
+    float const inv_dy12 = 1.0f / (v2.y - v1.y);
+    float const inv_dy23 = 1.0f / (v3.y - v2.y);
+    float const inv_dy31 = 1.0f / (v1.y - v3.y);
 
     for (int32_t y = ymin; y <= ymax; ++y)
-      // NOTE:
-      // since we are iterating by y, we can compute the min x and max x here
-      // and limit the size of the inner loop significantly whitout sacrificing
-      // any data dependency or parralel potential
-      for (int32_t x = xmin; x <= xmax; ++x)
+    {
+      float const yc       = (float)y + 0.5f;
+      float       row_xmin = screen_xmax;
+      float       row_xmax = 0.0f;
+
+      {  // v1 -> v2
+        float const t  = (yc - v1.y) * inv_dy12;
+        float const xi = v1.x + t * (v2.x - v1.x);
+
+        float const ymin_edge = fminf(v1.y, v2.y);
+        float const ymax_edge = fmaxf(v1.y, v2.y);
+
+        if (yc >= ymin_edge && yc <= ymax_edge)
+        {
+          row_xmin = fminf(row_xmin, xi);
+          row_xmax = fmaxf(row_xmax, xi);
+        }
+      }
+      {  // v2 -> v3
+        float const t = (yc - v2.y) * inv_dy23;
+
+        float const xi = v2.x + t * (v3.x - v2.x);
+
+        float const ymin_edge = fminf(v2.y, v3.y);
+        float const ymax_edge = fmaxf(v2.y, v3.y);
+
+        if (yc >= ymin_edge && yc <= ymax_edge)
+        {
+          row_xmin = fminf(row_xmin, xi);
+          row_xmax = fmaxf(row_xmax, xi);
+        }
+      }
+      {  // v3 -> v1
+        float const t  = (yc - v3.y) * inv_dy31;
+        float const xi = v3.x + t * (v1.x - v3.x);
+
+        float const ymin_edge = fminf(v3.y, v1.y);
+        float const ymax_edge = fmaxf(v3.y, v1.y);
+
+        if (yc >= ymin_edge && yc <= ymax_edge)
+        {
+          row_xmin = fminf(row_xmin, xi);
+          row_xmax = fmaxf(row_xmax, xi);
+        }
+      }
+      int32_t const x0 = (int32_t)fmaxf(0.0f, row_xmin);
+      int32_t const x1 = (int32_t)fminf(screen_xmax, row_xmax);
+
+      for (int32_t x = x0; x <= x1; ++x)
       {
-        Vec3 const  p = new_vec3((float)x + 0.5f, (float)y + 0.5f, 0.0f);
+        Vec3 const  p = {(float)x + 0.5f, yc, 0.0f};
         float const w0 =
           (v3.x - v2.x) * (p.y - v2.y) - (v3.y - v2.y) * (p.x - v2.x);
         float const w1 =
@@ -747,32 +796,27 @@ void draw_triangle(Vertex const   *verts,
         float const w2 =
           (v2.x - v1.x) * (p.y - v1.y) - (v2.y - v1.y) * (p.x - v1.x);
 
-        if ((w0 >= 0 && w1 >= 0 && w2 >= 0) || (w0 <= 0 && w1 <= 0 && w2 <= 0))
+        float const  bw0 = w0 / area;
+        float const  bw1 = w1 / area;
+        float const  bw2 = w2 / area;
+        float const  z   = bw0 * v1.z + bw1 * v2.z + bw2 * v3.z;
+        size_t const idx = y * fb->width + x;
+
+        if (z >= fb->depth_buffer[fb->draw_idx][idx]) continue;
+
+        float varying[MAX_VARYING_ATTRS];
+        for (int i = 0; i < MAX_VARYING_ATTRS; ++i)
         {
-          float const  bw0 = w0 / area;
-          float const  bw1 = w1 / area;
-          float const  bw2 = w2 / area;
-          float const  z   = bw0 * v1.z + bw1 * v2.z + bw2 * v3.z;
-          size_t const idx = y * fb->width + x;
-
-          // NOTE: should empirically measure the early return vs. potential
-          // vectorization of using a masked write
-          if (z >= fb->depth_buffer[fb->draw_idx][idx]) continue;
-
-          // TODO: helper func for this
-          float varying[MAX_VARYING_ATTRS];
-          for (int i = 0; i < MAX_VARYING_ATTRS; ++i)
-          {
-            varying[i] = bw0 * tv[0].varying[i] + bw1 * tv[1].varying[i] +
-                         bw2 * tv[2].varying[i];
-          }
-          Color const phong_color =
-            shade_pixel(tex, varying, camera_pos, material);
-
-          fb->depth_buffer[fb->draw_idx][idx] = z;
-          draw_pixel(x, y, phong_color, fb);
+          varying[i] = bw0 * tv[0].varying[i] + bw1 * tv[1].varying[i] +
+                       bw2 * tv[2].varying[i];
         }
+        Color const phong_color =
+          shade_pixel(tex, varying, camera_pos, material);
+
+        fb->depth_buffer[fb->draw_idx][idx] = z;
+        draw_pixel(x, y, phong_color, fb);
       }
+    }
   }
 }
 
