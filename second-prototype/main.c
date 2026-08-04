@@ -364,11 +364,11 @@ Model load_model(char const *filename)
 void load_texture(Texture *tex, char const *filename)
 {
   tex->data = stbi_load(filename, &tex->width, &tex->height, &tex->channels, 0);
-  if (tex->channels < 4)
-  {
-    fprintf(stderr, "Incompatible PNG file %s\n", filename);
-    exit(1);
-  }
+  // if (tex->channels < 4)
+  // {
+  //   fprintf(stderr, "Incompatible PNG file %s\n", filename);
+  //   exit(1);
+  // }
 }
 
 // ============================================================================
@@ -862,6 +862,8 @@ void draw_model_wireframe(Model const *model,
   }
 }
 
+static Vertex transformed[14285714];
+
 void draw_model(Model const *model,
                 Mat4 const  *view,
                 Mat4 const  *projection,
@@ -870,7 +872,7 @@ void draw_model(Model const *model,
                 bool const   backface_culling)
 {
   // NOTE: maybe move transformed buffer to the heap and reuse it
-  Vertex transformed[model->mesh.vertex_count];
+  // Vertex transformed[model->mesh.vertex_count];
 
   Mat3 const normal_mat =
     mat3_transpose(mat3_inverse(mat4_to_mat3(model->mtw)));
@@ -1121,7 +1123,7 @@ int main(int argc, char *argv[])
          render_img->green_mask,
          render_img->blue_mask);
 
-  load_texture(&tex0, "textures/placeholder128x128.png");
+  load_texture(&tex0, "textures/martin.png");
   load_texture(&tex1, "textures/placeholder16x16.png");
 
   light0 = (Light){.pos       = new_vec3(0.0f, 20.0f, 8.0f),
@@ -1130,14 +1132,17 @@ int main(int argc, char *argv[])
   ambient_light_color = new_vec3(0.25f, 0.30f, 0.40f);
 
   Model teapot_model       = load_model("models/teapot.obj");
-  Model teapot_model_matte = load_model("models/teapot.obj");
-  Model teapot_model_shiny = load_model("models/teapot.obj");
   teapot_model.mtw         = identity();
   teapot_model.tex         = &tex1;
+  Model teapot_model_matte = load_model("models/teapot.obj");
   teapot_model_matte.mtw   = translate(-7.5, 0.0, 0.0);
   teapot_model_matte.tex   = &tex1;
+  Model teapot_model_shiny = load_model("models/teapot.obj");
   teapot_model_shiny.mtw   = translate(7.5, 0.0, 0.0);
   teapot_model_shiny.tex   = &tex1;
+  Model martin             = load_model("models/martin.obj");
+  martin.mtw               = translate(0.0, 15.0, 0.0);
+  martin.tex               = &tex0;
 
   Material matte_material = {
     .ambient_coeff     = 0.15f,
@@ -1163,9 +1168,15 @@ int main(int argc, char *argv[])
   teapot_model.material       = porcelain_material;
   teapot_model_matte.material = matte_material;
   teapot_model_shiny.material = metallic_material;
+  martin.material             = porcelain_material;
 
-#define NR_MODELS 3
-  Model scene[3] = {teapot_model, teapot_model_matte, teapot_model_shiny};
+#define NR_MODELS 4
+  Model scene[4] = {
+    teapot_model,
+    teapot_model_matte,
+    teapot_model_shiny,
+    martin,
+  };
 
   for (size_t i = 0; i < teapot_model.mesh.vertex_count; i++)
   {
@@ -1196,7 +1207,7 @@ int main(int argc, char *argv[])
     double const dt = get_frame_delta();
     printf("frame time: %.4f seconds => FPS: %d\n", dt, (int)(1.0 / dt));
 
-    poll_input(cfg, &quit, &input_state);
+    // poll_input(cfg, &quit, &input_state);
 
     update_camera(&camera, &input_state, dt);
 
@@ -1208,6 +1219,7 @@ int main(int argc, char *argv[])
     scene[0].mtw = rotate_y(angle);
     scene[1].mtw = mat4_mult(translate(-7.5f, 0.0f, 0.0f), rotate_y(angle));
     scene[2].mtw = mat4_mult(translate(7.5f, 0.0f, 0.0f), rotate_y(angle));
+    scene[3].mtw = mat4_mult(translate(0.0f, 2.0f, 8.5f), rotate_y(angle));
 
     // world-to-view
     Mat4 view = look_at(camera.camera_pos,
