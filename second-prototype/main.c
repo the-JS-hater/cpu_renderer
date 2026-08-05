@@ -862,6 +862,8 @@ void draw_model_wireframe(Model const *model,
   }
 }
 
+// TODO: move this somewhere sensible and rename it. Also probably use a dynamic
+// array Arbitrary number, := nr. of vertices is Martin
 static Vertex transformed[14285714];
 
 void draw_model(Model const *model,
@@ -872,6 +874,8 @@ void draw_model(Model const *model,
                 bool const   backface_culling)
 {
   // NOTE: maybe move transformed buffer to the heap and reuse it
+  // Vertex transformed[model->mesh.vertex_count];
+
   // Vertex transformed[model->mesh.vertex_count];
 
   Mat3 const normal_mat =
@@ -1170,7 +1174,7 @@ int main(int argc, char *argv[])
   teapot_model_shiny.material = metallic_material;
   martin.material             = porcelain_material;
 
-#define NR_MODELS 4
+#define NR_MODELS 3
   Model scene[4] = {
     teapot_model,
     teapot_model_matte,
@@ -1207,7 +1211,7 @@ int main(int argc, char *argv[])
     double const dt = get_frame_delta();
     printf("frame time: %.4f seconds => FPS: %d\n", dt, (int)(1.0 / dt));
 
-    // poll_input(cfg, &quit, &input_state);
+    poll_input(cfg, &quit, &input_state);
 
     update_camera(&camera, &input_state, dt);
 
