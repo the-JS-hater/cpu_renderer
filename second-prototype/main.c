@@ -387,6 +387,86 @@ void load_texture(Texture *tex, char const *filename)
   }
 }
 
+// NOTE: Temporary, but might be repurposed to generate mesh from image
+// data/heightmap?
+Mesh generate_ground_mesh(float const size,
+                          float const target_quad_size,
+                          float const uv_repeat)
+{
+  static uint32_t const MAX_SUBDIVISIONS = 256;
+
+  uint32_t subdivisions = (uint32_t)(size / target_quad_size);
+  if (subdivisions < 1) subdivisions = 1;
+  if (subdivisions > MAX_SUBDIVISIONS) subdivisions = MAX_SUBDIVISIONS;
+
+  uint32_t const verts_per_side = subdivisions + 1;
+  uint32_t const quad_count     = subdivisions * subdivisions;
+
+  Mesh mesh         = {0};
+  mesh.vertex_count = (size_t)quad_count * 6;
+  mesh.index_count  = mesh.vertex_count;
+  mesh.verts        = calloc(mesh.vertex_count, sizeof(Vertex));
+  mesh.indices      = calloc(mesh.index_count, sizeof(size_t));
+
+  if (!mesh.verts || !mesh.indices)
+  {
+    free(mesh.verts);
+    free(mesh.indices);
+    return (Mesh){0};
+  }
+  float const half = size * 0.5f;
+  float const step = size / (float)subdivisions;
+
+  size_t out = 0;
+  for (uint32_t row = 0; row < subdivisions; ++row)
+  {
+    for (uint32_t col = 0; col < subdivisions; ++col)
+    {
+      float const x0 = -half + (float)col * step;
+      float const x1 = x0 + step;
+      float const z0 = -half + (float)row * step;
+      float const z1 = z0 + step;
+
+      float const u0 = (float)col / (float)subdivisions * uv_repeat;
+      float const u1 = (float)(col + 1) / (float)subdivisions * uv_repeat;
+      float const v0 = (float)row / (float)subdivisions * uv_repeat;
+      float const v1 = (float)(row + 1) / (float)subdivisions * uv_repeat;
+
+      float const px[4] = {x0, x1, x1, x0};
+      float const pz[4] = {z0, z0, z1, z1};
+      float const pu[4] = {u0, u1, u1, u0};
+      float const pv[4] = {v0, v0, v1, v1};
+
+      static int const tri_a[3] = {0, 2, 1};
+      static int const tri_b[3] = {0, 3, 2};
+
+      for (int t = 0; t < 2; ++t)
+      {
+        int const *tri = (t == 0) ? tri_a : tri_b;
+        for (int k = 0; k < 3; ++k)
+        {
+          int const c = tri[k];
+          Vertex   *v = &mesh.verts[out];
+          v->pos      = new_vec4(px[c], 0.0f, pz[c], 1.0f);
+
+          v->varying[SURFACE_X] = px[c];
+          v->varying[SURFACE_Y] = 0.0f;
+          v->varying[SURFACE_Z] = pz[c];
+          v->varying[NORMAL_X]  = 0.0f;
+          v->varying[NORMAL_Y]  = 1.0f;
+          v->varying[NORMAL_Z]  = 0.0f;
+          v->varying[UV_U]      = pu[c];
+          v->varying[UV_V]      = pv[c];
+
+          mesh.indices[out] = out;
+          ++out;
+        }
+      }
+    }
+  }
+  return mesh;
+}
+
 // ============================================================================
 // DRAWING
 // ============================================================================
@@ -1211,8 +1291,15 @@ int main(int argc, char *argv[])
   teapot_model_shiny.material = metallic_material;
   martin.material             = porcelain_material;
 
-#define NR_MODELS 3
-  Model scene[4] = {
+  Model ground    = {0};
+  ground.mesh     = generate_ground_mesh(60.0f, 1.5f, 12.0f);
+  ground.mtw      = identity();
+  ground.tex      = &tex1;
+  ground.material = matte_material;
+
+#define NR_MODELS 4
+  Model scene[5] = {
+    ground,
     teapot_model,
     teapot_model_matte,
     teapot_model_shiny,
@@ -1258,10 +1345,10 @@ int main(int argc, char *argv[])
     // model-to-world
     static float angle = 0.0f;
     angle += dt;
-    scene[0].mtw = rotate_y(angle);
-    scene[1].mtw = mat4_mult(translate(-7.5f, 0.0f, 0.0f), rotate_y(angle));
-    scene[2].mtw = mat4_mult(translate(7.5f, 0.0f, 0.0f), rotate_y(angle));
-    scene[3].mtw = mat4_mult(translate(0.0f, 2.0f, 8.5f), rotate_y(angle));
+    scene[1].mtw = rotate_y(angle);
+    scene[2].mtw = mat4_mult(translate(-7.5f, 0.0f, 0.0f), rotate_y(angle));
+    scene[3].mtw = mat4_mult(translate(7.5f, 0.0f, 0.0f), rotate_y(angle));
+    scene[4].mtw = mat4_mult(translate(0.0f, 2.0f, 8.5f), rotate_y(angle));
 
     // world-to-view
     Mat4 view = look_at(camera.camera_pos,
