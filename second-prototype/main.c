@@ -21,6 +21,8 @@ typedef struct {
   unsigned int res_w, res_h;
   int          screen, depth;
   bool         borderless;
+  bool         wireframe;
+  bool         fps;
 } AppConfig;
 
 typedef struct {
@@ -102,6 +104,8 @@ typedef enum {
   KEY_S          = 39,
   KEY_D          = 40,
   KEY_R          = 27,
+  KEY_Q          = 24,
+  KEY_F          = 41,
 } KEY_ENUM;
 
 // TODO: replace with bitfield later on
@@ -152,6 +156,10 @@ void parse_args(AppConfig *cfg, int argc, char *argv[])
       sscanf(argv[++i], "%dx%d", &cfg->res_w, &cfg->res_h);
     else if (!strcmp(argv[i], "-b"))
       cfg->borderless = true;
+    else if (!strcmp(argv[i], "--wireframe"))
+      cfg->wireframe = true;
+    else if (!strcmp(argv[i], "--fps"))
+      cfg->fps = true;
     else
     {
       fprintf(stderr, "Unknown argument: %s\n", argv[i]);
@@ -364,11 +372,11 @@ Model load_model(char const *filename)
 void load_texture(Texture *tex, char const *filename)
 {
   tex->data = stbi_load(filename, &tex->width, &tex->height, &tex->channels, 0);
-  // if (tex->channels < 4)
-  // {
-  //   fprintf(stderr, "Incompatible PNG file %s\n", filename);
-  //   exit(1);
-  // }
+  if (tex->channels < 4)
+  {
+    fprintf(stderr, "Incompatible PNG file %s\n", filename);
+    exit(1);
+  }
 }
 
 // ============================================================================
@@ -1026,6 +1034,9 @@ void poll_input(AppConfig *cfg, bool *quit, InputState *input)
         case KEY_D: input->d = true; break;
         case KEY_LEFT_SHIFT: input->shift = true; break;
         case KEY_LEFT_CTRL: input->ctrl = true; break;
+        case KEY_Q: cfg->wireframe = !cfg->wireframe; break;
+        case KEY_F: cfg->fps = !cfg->fps; break;
+        default: printf("key pressed: %d\n", event.xkey.keycode);
       }
     }
     if (event.type == KeyRelease)
@@ -1127,7 +1138,7 @@ int main(int argc, char *argv[])
          render_img->green_mask,
          render_img->blue_mask);
 
-  load_texture(&tex0, "textures/martin.png");
+  // load_texture(&tex0, "textures/martin.png");
   load_texture(&tex1, "textures/placeholder16x16.png");
 
   light0 = (Light){.pos       = new_vec3(0.0f, 20.0f, 8.0f),
@@ -1146,7 +1157,7 @@ int main(int argc, char *argv[])
   teapot_model_shiny.tex   = &tex1;
   Model martin             = load_model("models/martin.obj");
   martin.mtw               = translate(0.0, 15.0, 0.0);
-  martin.tex               = &tex0;
+  martin.tex               = &tex1;
 
   Material matte_material = {
     .ambient_coeff     = 0.15f,
@@ -1209,7 +1220,8 @@ int main(int argc, char *argv[])
   {
     // WARN: only call once per frame
     double const dt = get_frame_delta();
-    printf("frame time: %.4f seconds => FPS: %d\n", dt, (int)(1.0 / dt));
+    if (cfg->fps)
+      printf("frame time: %.4f seconds => FPS: %d\n", dt, (int)(1.0 / dt));
 
     poll_input(cfg, &quit, &input_state);
 
@@ -1229,23 +1241,26 @@ int main(int argc, char *argv[])
     Mat4 view = look_at(camera.camera_pos,
                         vec3_add(camera.camera_pos, camera.camera_front),
                         camera.camera_up);
-
-    // Draw wireframe debugging
-    // for (unsigned i = 0; i < NR_MODELS; ++i)
-    // {
-    //   bool triangle = true, bbox = false;
-    //   draw_model_wireframe(&scene[i],
-    //                        &view,
-    //                        &projection,
-    //                        &camera.camera_pos,
-    //                        fb,
-    //                        triangle,
-    //                        bbox);
-    // }
-
-    // Draw all the models
-    draw_scene(scene, NR_MODELS, &view, &projection, &camera, fb, true);
-
+    if (cfg->wireframe)
+    {
+      // Draw wireframe debugging
+      for (unsigned i = 0; i < NR_MODELS; ++i)
+      {
+        bool triangle = true, bbox = false;
+        draw_model_wireframe(&scene[i],
+                             &view,
+                             &projection,
+                             &camera.camera_pos,
+                             fb,
+                             triangle,
+                             bbox);
+      }
+    }
+    else
+    {
+      // Draw all the models
+      draw_scene(scene, NR_MODELS, &view, &projection, &camera, fb, true);
+    }
     update_window(cfg, render_img, disp_img, db, fb);
   };
   close_window(cfg);
