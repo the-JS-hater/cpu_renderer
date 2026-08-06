@@ -7,6 +7,7 @@
 
 #include "include/stb_image.h"  //MAYBE: handroll png loader
 #include <X11/Xlib.h>
+#include <X11/keysym.h>
 #include <math.h>
 
 #include "linalg.h"
@@ -95,20 +96,12 @@ typedef struct {
   Material material;
 } Model;
 
-typedef enum {
-  KEY_ESC        = 9,
-  KEY_LEFT_SHIFT = 50,
-  KEY_LEFT_CTRL  = 37,
-  KEY_W          = 25,
-  KEY_A          = 38,
-  KEY_S          = 39,
-  KEY_D          = 40,
-  KEY_R          = 27,
-  KEY_Q          = 24,
-  KEY_F          = 41,
-} KEY_ENUM;
+typedef struct {
+  KeyCode esc, w, a, s, d, r, q, f;
+  KeyCode left_shift, left_ctrl;
+} KeyMap;
 
-// TODO: replace with bitfield later on
+// TODO: replace with bitfield, or something else, later on
 typedef struct {
   bool w;
   bool a;
@@ -124,6 +117,7 @@ typedef struct {
 // GLOBALS
 // ============================================================================
 
+static KeyMap          keymap;
 static struct timespec last_frame;
 Texture                tex0;
 Texture                tex1;
@@ -133,6 +127,20 @@ static Vec3            ambient_light_color;
 // ============================================================================
 // PLUMBING & MISC
 // ============================================================================
+
+void init_keymap(Display *display)
+{
+  keymap.esc        = XKeysymToKeycode(display, XK_Escape);
+  keymap.w          = XKeysymToKeycode(display, XK_w);
+  keymap.a          = XKeysymToKeycode(display, XK_a);
+  keymap.s          = XKeysymToKeycode(display, XK_s);
+  keymap.d          = XKeysymToKeycode(display, XK_d);
+  keymap.r          = XKeysymToKeycode(display, XK_r);
+  keymap.q          = XKeysymToKeycode(display, XK_q);
+  keymap.f          = XKeysymToKeycode(display, XK_f);
+  keymap.left_shift = XKeysymToKeycode(display, XK_Shift_L);
+  keymap.left_ctrl  = XKeysymToKeycode(display, XK_Control_L);
+}
 
 double get_frame_delta()
 {
@@ -1022,38 +1030,55 @@ void poll_input(AppConfig *cfg, bool *quit, InputState *input)
       input->mouse_dx += x - center_x;
       input->mouse_dy += y - center_y;
     }
-    // NOTE: look into using scancodes instead of keycodes
     if (event.type == KeyPress)
     {
-      switch (event.xkey.keycode)
-      {
-        case KEY_ESC: *quit = true; break;
-        case KEY_W: input->w = true; break;
-        case KEY_A: input->a = true; break;
-        case KEY_S: input->s = true; break;
-        case KEY_D: input->d = true; break;
-        case KEY_LEFT_SHIFT: input->shift = true; break;
-        case KEY_LEFT_CTRL: input->ctrl = true; break;
-        case KEY_Q: cfg->wireframe = !cfg->wireframe; break;
-        case KEY_F: cfg->fps = !cfg->fps; break;
-        default: printf("key pressed: %d\n", event.xkey.keycode);
-      }
+      KeyCode kc = event.xkey.keycode;
+      if (kc == keymap.esc)
+        *quit = true;
+      else if (kc == keymap.w)
+        input->w = true;
+      else if (kc == keymap.a)
+        input->a = true;
+      else if (kc == keymap.s)
+        input->s = true;
+      else if (kc == keymap.d)
+        input->d = true;
+      else if (kc == keymap.left_shift)
+        input->shift = true;
+      else if (kc == keymap.left_ctrl)
+        input->ctrl = true;
+      else if (kc == keymap.q)
+        cfg->wireframe = !cfg->wireframe;
+      else if (kc == keymap.f)
+        cfg->fps = !cfg->fps;
     }
     if (event.type == KeyRelease)
     {
-      switch (event.xkey.keycode)
-      {
-        case KEY_W: input->w = false; break;
-        case KEY_A: input->a = false; break;
-        case KEY_S: input->s = false; break;
-        case KEY_D: input->d = false; break;
-        case KEY_LEFT_SHIFT: input->shift = false; break;
-        case KEY_LEFT_CTRL: input->ctrl = false; break;
-      }
+      KeyCode kc = event.xkey.keycode;
+      if (kc == keymap.w)
+        input->w = false;
+      else if (kc == keymap.a)
+        input->a = false;
+      else if (kc == keymap.s)
+        input->s = false;
+      else if (kc == keymap.d)
+        input->d = false;
+      else if (kc == keymap.left_shift)
+        input->shift = false;
+      else if (kc == keymap.left_ctrl)
+        input->ctrl = false;
     }
+    XWarpPointer(cfg->display,
+                 None,
+                 cfg->window,
+                 0,
+                 0,
+                 0,
+                 0,
+                 center_x,
+                 center_y);
+    XFlush(cfg->display);
   }
-  XWarpPointer(cfg->display, None, cfg->window, 0, 0, 0, 0, center_x, center_y);
-  XFlush(cfg->display);
 }
 
 void update_camera(Camera *camera, InputState const *input, double const dt)
@@ -1109,6 +1134,7 @@ int main(int argc, char *argv[])
 
   parse_args(cfg, argc, argv);
   create_window(cfg, "CPU RENDERING PROTOTYPE V2");
+  init_keymap(cfg->display);
 
   FrameBuffer   *fb = init_framebuffer(cfg->res_w, cfg->res_h);
   DisplayBuffer *db = init_display_buffer(cfg->win_w, cfg->win_h);
