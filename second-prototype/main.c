@@ -63,6 +63,7 @@ typedef enum {
 typedef struct {
   Vec4  pos;
   float varying[MAX_VARYING_ATTRS];
+  float inv_w;
 } Vertex;
 
 typedef struct {
@@ -633,9 +634,15 @@ void vertex_to_screen(Vertex        *verts,
 {
   for (uint8_t i = 0; i < 3; i++)
   {
-    verts[i].pos.x /= verts[i].pos.w;
-    verts[i].pos.y /= verts[i].pos.w;
-    verts[i].pos.z /= verts[i].pos.w;
+    float const inv_w = 1.0f / verts[i].pos.w;
+    verts[i].inv_w    = inv_w;
+
+    for (size_t j = 0; j < MAX_VARYING_ATTRS; ++j) verts[i].varying[j] *= inv_w;
+
+    verts[i].pos.x *= inv_w;
+    verts[i].pos.y *= inv_w;
+    verts[i].pos.z *= inv_w;
+
     verts[i].pos.x = (verts[i].pos.x + 1.0f) * 0.5f * fb_width;
     verts[i].pos.y = (1.0f - verts[i].pos.y) * 0.5f * fb_height;
   }
@@ -765,13 +772,13 @@ void draw_triangle_wireframe(Vertex const *verts,
   }
 }
 
-void interpolate_attributes(float *restrict src,
-                            float const *restrict dst0,
-                            float const *restrict dst1,
-                            float const *restrict dst2,
-                            float const w0,
-                            float const w1,
-                            float const w2)
+static inline void interpolate_attributes(float *restrict src,
+                                          float const *restrict dst0,
+                                          float const *restrict dst1,
+                                          float const *restrict dst2,
+                                          float const w0,
+                                          float const w1,
+                                          float const w2)
 {
   for (size_t i = 0; i < MAX_VARYING_ATTRS; ++i)
     src[i] = w0 * dst0[i] + w1 * dst1[i] + w2 * dst2[i];
@@ -900,12 +907,20 @@ void draw_triangle(Vertex const   *verts,
 
         if (z >= fb->depth_buffer[fb->draw_idx][idx]) continue;
 
+        float const inv_w =
+          bw0 * tv[0].inv_w + bw1 * tv[1].inv_w + bw2 * tv[2].inv_w;
+
         float varying[MAX_VARYING_ATTRS];
-        for (int i = 0; i < MAX_VARYING_ATTRS; ++i)
-        {
-          varying[i] = bw0 * tv[0].varying[i] + bw1 * tv[1].varying[i] +
-                       bw2 * tv[2].varying[i];
-        }
+        interpolate_attributes(varying,
+                               tv[0].varying,
+                               tv[1].varying,
+                               tv[2].varying,
+                               bw0,
+                               bw1,
+                               bw2);
+
+        for (size_t i = 0; i < MAX_VARYING_ATTRS; ++i) varying[i] /= inv_w;
+
         Color const phong_color =
           shade_pixel(tex, varying, camera_pos, material);
 
