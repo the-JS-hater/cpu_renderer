@@ -7,6 +7,7 @@
 
 #include "include/stb_image.h"  //MAYBE: handroll png loader
 #include <X11/Xlib.h>
+#include <X11/Xutil.h>
 #include <X11/keysym.h>
 #include <math.h>
 
@@ -270,6 +271,35 @@ DisplayBuffer *init_display_buffer(unsigned width, unsigned height)
   return db;
 }
 
+void handle_resize(AppConfig *cfg, DisplayBuffer *db, XImage **disp_img)
+{
+  XWindowAttributes attrs;
+  XGetWindowAttributes(cfg->display, cfg->window, &attrs);
+
+  if (attrs.width == db->width && attrs.height == db->height) return;
+
+  cfg->win_w = attrs.width;
+  cfg->win_h = attrs.height;
+
+  // Note: This frees db->pixels!
+  XDestroyImage(*disp_img);
+
+  db->width  = cfg->win_w;
+  db->height = cfg->win_h;
+  db->pixels = calloc(db->width * db->height, sizeof(uint32_t));
+
+  *disp_img = XCreateImage(cfg->display,
+                           cfg->visual,
+                           cfg->depth,
+                           ZPixmap,
+                           0,
+                           (char *)db->pixels,
+                           cfg->win_w,
+                           cfg->win_h,
+                           32,
+                           0);
+}
+
 void resample_nearest(uint32_t const *restrict src,
                       uint32_t *restrict dst,
                       uint32_t const db_width,
@@ -289,7 +319,6 @@ void resample_nearest(uint32_t const *restrict src,
 }
 
 void update_window(AppConfig const *cfg,
-                   XImage          *render_img,
                    XImage          *disp_img,
                    DisplayBuffer   *db,
                    FrameBuffer     *fb)
@@ -311,8 +340,7 @@ void update_window(AppConfig const *cfg,
             cfg->win_w,
             cfg->win_h);
   XFlush(cfg->display);
-  fb->draw_idx     = !fb->draw_idx;
-  render_img->data = (char *)fb->color_buffer[fb->draw_idx];
+  fb->draw_idx = !fb->draw_idx;
 }
 
 Mesh mesh_from_obj(ObjObject const *obj)
@@ -380,6 +408,7 @@ Model load_model(char const *filename)
 
 void load_texture(Texture *tex, char const *filename)
 {
+  stbi_set_flip_vertically_on_load(true);
   tex->data = stbi_load(filename, &tex->width, &tex->height, &tex->channels, 0);
   if (tex->channels < 4)
   {
@@ -494,10 +523,6 @@ void draw_line(FrameBuffer *fb, Vec4 const s, Vec4 const e, Color const color)
   {
     return;
   }
-  x0 = x0 < 0 ? 0 : (x0 >= (int32_t)fb->width ? fb->width - 1 : x0);
-  y0 = y0 < 0 ? 0 : (y0 >= (int32_t)fb->height ? fb->height - 1 : y0);
-  x1 = x1 < 0 ? 0 : (x1 >= (int32_t)fb->width ? fb->width - 1 : x1);
-  y1 = y1 < 0 ? 0 : (y1 >= (int32_t)fb->height ? fb->height - 1 : y1);
 
   int32_t dx  = abs(x1 - x0);
   int32_t sx  = x0 < x1 ? 1 : -1;
@@ -507,7 +532,11 @@ void draw_line(FrameBuffer *fb, Vec4 const s, Vec4 const e, Color const color)
 
   while (true)
   {
-    draw_pixel(x0, y0, color, fb);
+    if (y0 < fb->height && x0 < fb->width && y0 > 0 && x0 > 0)
+    {
+      draw_pixel(x0, y0, color, fb);
+    }
+
     if (x0 == x1 && y0 == y1) break;
 
     int e2 = 2 * err;
@@ -536,10 +565,10 @@ static inline uint32_t pack_color(float const in_r,
   return (a << 24) | (r << 16) | (g << 8) | b;
 }
 
-uint32_t sample_texture(Texture const   *tex,
-                        SampleMode const mode,
-                        float const      u,
-                        float const      v)
+static inline uint32_t sample_texture(Texture const   *tex,
+                                      SampleMode const mode,
+                                      float const      u,
+                                      float const      v)
 {
   // NOTE: getting rid of clamped and using % for wrapping idx this might be
   // alot more vectorizable, or somehow convice the compiler mode will be same
@@ -548,12 +577,12 @@ uint32_t sample_texture(Texture const   *tex,
   int32_t x = (int32_t)(u * tex->width);
   int32_t y = (int32_t)(v * tex->height);
 
-  if (mode == CLAMP)
-  {
-    x = x < 0 ? 0 : (x >= tex->width ? tex->width - 1 : x);
-    y = y < 0 ? 0 : (y >= tex->height ? tex->height - 1 : y);
-  }
-  if (mode == WRAP)
+  // if (mode == CLAMP)
+  // {
+  //   x = x < 0 ? 0 : (x >= tex->width ? tex->width - 1 : x);
+  //   y = y < 0 ? 0 : (y >= tex->height ? tex->height - 1 : y);
+  // }
+  // if (mode == WRAP)
   {
     float wu = u - floorf(u);
     float wv = v - floorf(v);
@@ -823,7 +852,7 @@ void draw_triangle(Vertex const   *verts,
     float const area =
       (v2.x - v1.x) * (v3.y - v1.y) - (v2.y - v1.y) * (v3.x - v1.x);
 
-    if (backface_culling && area >= 0) continue;
+    if (backface_culling && area >= 0) return;
 
     float fymin = fminf(v1.y, fminf(v2.y, v3.y));
     float fymax = fmaxf(v1.y, fmaxf(v2.y, v3.y));
@@ -891,7 +920,9 @@ void draw_triangle(Vertex const   *verts,
 
       for (int32_t x = x0; x <= x1; ++x)
       {
-        Vec3 const  p = {(float)x + 0.5f, yc, 0.0f};
+        Vec3 const p = {
+          {(float)x + 0.5f, yc, 0.0f}
+        };
         float const w0 =
           (v3.x - v2.x) * (p.y - v2.y) - (v3.y - v2.y) * (p.x - v2.x);
         float const w1 =
@@ -930,6 +961,7 @@ void draw_triangle(Vertex const   *verts,
     }
   }
 }
+
 
 void draw_model_wireframe(Model const *model,
                           Mat4 const  *view,
@@ -1259,7 +1291,7 @@ int main(int argc, char *argv[])
          render_img->green_mask,
          render_img->blue_mask);
 
-  // load_texture(&tex0, "textures/martin.png");
+  load_texture(&tex0, "textures/computer-atlas.png");
   load_texture(&tex1, "textures/placeholder16x16.png");
 
   light0 = (Light){.pos       = new_vec3(0.0f, 20.0f, 8.0f),
@@ -1267,18 +1299,9 @@ int main(int argc, char *argv[])
 
   ambient_light_color = new_vec3(0.25f, 0.30f, 0.40f);
 
-  Model teapot_model       = load_model("models/teapot.obj");
-  teapot_model.mtw         = identity();
-  teapot_model.tex         = &tex1;
-  Model teapot_model_matte = load_model("models/teapot.obj");
-  teapot_model_matte.mtw   = translate(-7.5, 0.0, 0.0);
-  teapot_model_matte.tex   = &tex1;
-  Model teapot_model_shiny = load_model("models/teapot.obj");
-  teapot_model_shiny.mtw   = translate(7.5, 0.0, 0.0);
-  teapot_model_shiny.tex   = &tex1;
-  Model martin             = load_model("models/martin.obj");
-  martin.mtw               = translate(0.0, 15.0, 0.0);
-  martin.tex               = &tex1;
+  Model computer_model = load_model("models/computer.obj");
+  computer_model.mtw   = identity();
+  computer_model.tex   = &tex0;
 
   Material matte_material = {
     .ambient_coeff     = 0.15f,
@@ -1287,24 +1310,7 @@ int main(int argc, char *argv[])
     .shininess         = 4.0f,
     .specular_color    = {1.0f, 1.0f, 1.0f},
   };
-  Material porcelain_material = {
-    .ambient_coeff     = 0.12f,
-    .diffuse_coeff     = 0.45f,
-    .specular_strength = 0.85f,
-    .shininess         = 120.0f,
-    .specular_color    = {1.0f, 1.0f, 1.0f},
-  };
-  Material metallic_material = {
-    .ambient_coeff     = 0.10f,
-    .diffuse_coeff     = 0.15f,
-    .specular_strength = 0.9f,
-    .shininess         = 60.0f,
-    .specular_color    = {0.9f, 0.9f, 0.9f},
-  };
-  teapot_model.material       = porcelain_material;
-  teapot_model_matte.material = matte_material;
-  teapot_model_shiny.material = metallic_material;
-  martin.material             = porcelain_material;
+  computer_model.material = matte_material;
 
   Model ground    = {0};
   ground.mesh     = generate_ground_mesh(60.0f, 1.5f, 12.0f);
@@ -1312,23 +1318,9 @@ int main(int argc, char *argv[])
   ground.tex      = &tex1;
   ground.material = matte_material;
 
-#define NR_MODELS 4
-  Model scene[5] = {
-    ground,
-    teapot_model,
-    teapot_model_matte,
-    teapot_model_shiny,
-    martin,
-  };
+#define NR_MODELS 2
+  Model scene[2] = {ground, computer_model};
 
-  for (size_t i = 0; i < teapot_model.mesh.vertex_count; i++)
-  {
-    Vertex *v = &teapot_model.mesh.verts[i];
-
-    v->varying[COLOR_R] = v->varying[NORMAL_X] * 0.5f + 0.5f;
-    v->varying[COLOR_G] = v->varying[NORMAL_Y] * 0.5f + 0.5f;
-    v->varying[COLOR_B] = v->varying[NORMAL_Z] * 0.5f + 0.5f;
-  }
   Camera camera = {
     .camera_up    = (Vec3){0.0f, 1.0f, 0.0f },
     .camera_front = (Vec3){0.0f, 0.0f, -1.0f},
@@ -1346,6 +1338,8 @@ int main(int argc, char *argv[])
   static bool quit        = false;
   while (!quit)
   {
+    handle_resize(cfg, db, &disp_img);
+
     // WARN: only call once per frame
     double const dt = get_frame_delta();
     if (cfg->fps)
@@ -1361,9 +1355,6 @@ int main(int argc, char *argv[])
     static float angle = 0.0f;
     angle += dt;
     scene[1].mtw = rotate_y(angle);
-    scene[2].mtw = mat4_mult(translate(-7.5f, 0.0f, 0.0f), rotate_y(angle));
-    scene[3].mtw = mat4_mult(translate(7.5f, 0.0f, 0.0f), rotate_y(angle));
-    scene[4].mtw = mat4_mult(translate(0.0f, 2.0f, 8.5f), rotate_y(angle));
 
     // world-to-view
     Mat4 view = look_at(camera.camera_pos,
@@ -1389,7 +1380,7 @@ int main(int argc, char *argv[])
       // Draw all the models
       draw_scene(scene, NR_MODELS, &view, &projection, &camera, fb, true);
     }
-    update_window(cfg, render_img, disp_img, db, fb);
+    update_window(cfg, disp_img, db, fb);
   };
   close_window(cfg);
   return 0;
